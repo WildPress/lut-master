@@ -1,0 +1,681 @@
+import glob
+import os
+
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+
+N = 33
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUT = os.path.join(HERE, "out")
+OUT_IN = os.path.join(OUT, "input")
+OUT_LOOK = os.path.join(OUT, "looks")
+
+LUMA = np.array([0.2126, 0.7152, 0.0722])
+PIVOT = 0.409  # Rec.709 OETF of 18% grey
+NEUTRAL_G = 1.15  # gentle S-curve baked into every input transform
+KNEE = 0.85  # highlight shoulder knee (display-referred)
+
+# ----------------------------------------------------------------------------
+# Colour primaries (CIE xy) -> matrices
+# ----------------------------------------------------------------------------
+D65 = (0.3127, 0.3290)
+P709 = [(0.64, 0.33), (0.30, 0.60), (0.15, 0.06)]
+P2020 = [(0.708, 0.292), (0.170, 0.797), (0.131, 0.046)]  # F-Gamut, N-Log gamut (manufacturer PDFs)
+PVGAMUT = [(0.730, 0.280), (0.165, 0.840), (0.100, -0.030)]  # Panasonic V-Log/V-Gamut manual 4.1
+PDGAMUT = [(0.71, 0.31), (0.21, 0.88), (0.09, -0.08)]  # DJI D-Log/D-Gamut white paper
+PSGAMUT3CINE = [(0.766, 0.275), (0.225, 0.800), (0.089, -0.087)]  # Sony S-Gamut3.Cine
+
+
+def xy_to_xyz(x, y):
+    return np.array([x / y, 1.0, (1 - x - y) / y])
+
+
+def rgb_to_xyz(prim, white=D65):
+    P = np.array([xy_to_xyz(*p) for p in prim]).T
+    S = np.linalg.solve(P, xy_to_xyz(*white))
+    return P * S
+
+
+def derive_to_709(prim):
+    return np.linalg.inv(rgb_to_xyz(P709)) @ rgb_to_xyz(prim)
+
+
+# Matrices published by the manufacturer (used when available)
+M_SGAMUT3CINE_PUB = np.array([
+    [1.6269474099, -0.5401385150, -0.0868088949],
+    [-0.1785155272, 1.4179409274, -0.2394254002],
+    [-0.0444361150, -0.1959199662, 1.2403560812]])
+M_VGAMUT_PUB = np.array([
+    [1.806576, -0.695697, -0.110879],
+    [-0.170090, 1.305955, -0.135865],
+    [-0.025206, -0.154468, 1.179674]])
+M_DGAMUT_PUB = np.array([
+    [1.6746, -0.5797, -0.0949],
+    [-0.0981, 1.3340, -0.2359],
+    [-0.0410, -0.2430, 1.2840]])
+
+
+# ----------------------------------------------------------------------------
+# Log curves. decode: code 0..1 (10-bit/1023) -> scene reflection (0.18 = mid grey)
+#             encode: scene reflection -> code 0..1
+# ----------------------------------------------------------------------------
+def _pos(y, floor=1e-12):
+    return np.maximum(y, floor)
+
+
+BP_SLOG3 = 171.2102946929
+
+
+def slog3_decode(x):
+    c = np.asarray(x, dtype=np.float64) * 1023.0
+    hi = np.power(10.0, (c - 420.0) / 261.5) * 0.19 - 0.01
+    lo = (c - 95.0) * 0.01125 / (BP_SLOG3 - 95.0)
+    return np.where(c >= BP_SLOG3, hi, lo)
+
+
+def slog3_encode(y):
+    y = np.asarray(y, dtype=np.float64)
+    hi = (420.0 + np.log10(_pos(y + 0.01) / 0.19) * 261.5) / 1023.0
+    lo = (y * (BP_SLOG3 - 95.0) / 0.01125 + 95.0) / 1023.0
+    return np.clip(np.where(y >= 0.01125, hi, lo), 0, 1)
+
+
+def vlog_decode(x):
+    x = np.asarray(x, dtype=np.float64)
+    c, d, b = 0.241514, 0.598206, 0.00873
+    return np.where(x < 0.181, (x - 0.125) / 5.6, np.power(10.0, (x - d) / c) - b)
+
+
+def vlog_encode(y):
+    y = np.asarray(y, dtype=np.float64)
+    c, d, b = 0.241514, 0.598206, 0.00873
+    hi = c * np.log10(_pos(y + b)) + d
+    return np.clip(np.where(y < 0.01, 5.6 * y + 0.125, hi), 0, 1)
+
+
+def _fuji(a, b, c, d, e, f, cut1, cut2):
+    def dec(x):
+        x = np.asarray(x, dtype=np.float64)
+        return np.where(x >= cut2, np.power(10.0, (x - d) / c) / a - b / a, (x - f) / e)
+
+    def enc(y):
+        y = np.asarray(y, dtype=np.float64)
+        hi = c * np.log10(_pos(a * y + b)) + d
+        return np.clip(np.where(y >= cut1, hi, e * y + f), 0, 1)
+
+    return dec, enc
+
+
+flog_decode, flog_encode = _fuji(0.555556, 0.009468, 0.344676, 0.790453, 8.735631, 0.092864,
+                                 0.00089, 0.100537775223865)
+flog2_decode, flog2_encode = _fuji(5.555556, 0.064829, 0.245281, 0.384316, 8.799461, 0.092864,
+                                   0.000889, 0.100686685370811)
+
+
+def nlog_decode(x):
+    c = np.asarray(x, dtype=np.float64) * 1023.0
+    return np.where(c < 452.0, np.power(c / 650.0, 3) - 0.0075, np.exp((c - 619.0) / 150.0))
+
+
+def nlog_encode(y):
+    y = np.asarray(y, dtype=np.float64)
+    lo = 650.0 * np.cbrt(np.maximum(y + 0.0075, 0.0))
+    hi = 150.0 * np.log(_pos(y)) + 619.0
+    return np.clip(np.where(y < 0.328, lo, hi) / 1023.0, 0, 1)
+
+
+def dlog_decode(x):
+    x = np.asarray(x, dtype=np.float64)
+    return np.where(x <= 0.14, (x - 0.0929) / 6.025,
+                    (np.power(10.0, 3.89616 * x - 2.27752) - 0.0108) / 0.9892)
+
+
+def dlog_encode(y):
+    y = np.asarray(y, dtype=np.float64)
+    hi = np.log10(_pos(y * 0.9892 + 0.0108)) * 0.256663 + 0.584555
+    return np.clip(np.where(y <= 0.0078, 6.025 * y + 0.0929, hi), 0, 1)
+
+
+# name -> (decode, encode, matrix-to-709, source note, published anchors {reflection: 10-bit code})
+PROFILES = {
+    "sony-slog3-to-rec709": dict(
+        title="Sony S-Log3 / S-Gamut3.Cine", dec=slog3_decode, enc=slog3_encode, M=M_SGAMUT3CINE_PUB,
+        prim=PSGAMUT3CINE, anchors={0.0: 95, 0.18: 420}, label="S-Log3",
+        source="Sony S-Log3 formula and S-Gamut3.Cine matrix (as commonly published by Sony, not re-checked against Sony's own document in this project)"),
+    "panasonic-vlog-to-rec709": dict(
+        title="Panasonic V-Log / V-Gamut", dec=vlog_decode, enc=vlog_encode, M=M_VGAMUT_PUB,
+        prim=PVGAMUT, anchors={0.0: 128, 0.18: 433, 0.90: 602}, label="V-Log",
+        source="Panasonic V-Log/V-Gamut Reference Manual Rev.1.0 (2014-11-28), sections 3, 4.1, 4.2"),
+    "fujifilm-flog-to-rec709": dict(
+        title="Fujifilm F-Log / F-Gamut (BT.2020)", dec=flog_decode, enc=flog_encode,
+        M=derive_to_709(P2020), prim=P2020, anchors={0.0: 95, 0.18: 470, 0.90: 705}, label="F-Log",
+        source="Fujifilm F-Log Data Sheet Ver.1.1, sections 2-3 (gamut is BT.2020, matrix derived from its primaries)"),
+    "fujifilm-flog2-to-rec709": dict(
+        title="Fujifilm F-Log2 / F-Gamut (BT.2020)", dec=flog2_decode, enc=flog2_encode,
+        M=derive_to_709(P2020), prim=P2020, anchors={0.0: 95, 0.18: 400, 0.90: 570}, label="F-Log2",
+        source="Fujifilm F-Log2 Data Sheet Ver.1.0, sections 2-3 (gamut is BT.2020, matrix derived from its primaries)"),
+    "nikon-nlog-to-rec709": dict(
+        title="Nikon N-Log (BT.2020)", dec=nlog_decode, enc=nlog_encode, M=derive_to_709(P2020),
+        prim=P2020, anchors={}, label="N-Log",
+        source="Nikon N-Log Specification 1.0.0 (Sc/Jp editions, 2018-09-01), sections 2-3; log() read as natural log"),
+    "dji-dlog-to-rec709": dict(
+        title="DJI D-Log / D-Gamut (Zenmuse X7/X9)", dec=dlog_decode, enc=dlog_encode, M=M_DGAMUT_PUB,
+        prim=PDGAMUT, anchors={0.0: 95, 0.18: 408, 0.90: 586}, label="D-Log",
+        source="DJI D-Log/D-Gamut White Paper, Zenmuse X9 (2022.02), pages 3-4 and 7; consumer D-Log M may differ"),
+}
+
+
+# ----------------------------------------------------------------------------
+# Display transforms and colour helpers
+# ----------------------------------------------------------------------------
+def oetf709(L):
+    L = np.clip(L, 0.0, None)
+    return np.where(L < 0.018, 4.5 * L, 1.099 * np.power(L, 0.45) - 0.099)
+
+
+def shoulder(x, k=KNEE):
+    """Soft highlight roll-off above the knee; identity below, asymptote 1.0."""
+    return np.where(x <= k, x, k + (1 - k) * (1 - np.exp(-(x - k) / (1 - k))))
+
+
+def smoothstep(e0, e1, x):
+    t = np.clip((x - e0) / (e1 - e0), 0.0, 1.0)
+    return t * t * (3 - 2 * t)
+
+
+def luma(x):
+    return x @ LUMA
+
+
+def scurve(x, p=PIVOT, g=1.15):
+    x = np.clip(x, 0.0, 1.0)
+    lo = p * np.power(np.clip(x / p, 0, 1), g)
+    hi = 1 - (1 - p) * np.power(np.clip((1 - x) / (1 - p), 0, 1), g)
+    return np.where(x < p, lo, hi)
+
+
+def rgb2hsv(rgb):
+    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    mx = rgb.max(-1)
+    mn = rgb.min(-1)
+    d = mx - mn
+    dd = np.where(d > 1e-9, d, 1.0)
+    h = np.select([d <= 1e-9, mx == r, mx == g],
+                  [0.0, ((g - b) / dd) % 6.0, (b - r) / dd + 2.0], (r - g) / dd + 4.0) * 60.0
+    s = np.where(mx > 1e-9, d / np.where(mx > 1e-9, mx, 1.0), 0.0)
+    return np.stack([h % 360.0, s, mx], -1)
+
+
+def hsv2rgb(hsv):
+    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    c = v * s
+    hp = (h / 60.0) % 6.0
+    x = c * (1 - np.abs(hp % 2.0 - 1))
+    m = v - c
+    z = np.zeros_like(c)
+    sec = hp.astype(int)
+    conds = [sec == i for i in range(6)]
+    r = np.select(conds, [c, x, z, z, x, c], z)
+    g = np.select(conds, [x, c, c, x, z, z], z)
+    b = np.select(conds, [z, z, x, c, c, x], z)
+    return np.stack([r + m, g + m, b + m], -1)
+
+
+def hue_adjust(rgb, adjustments):
+    hsv = rgb2hsv(rgb)
+    h, s, v = hsv[..., 0].copy(), hsv[..., 1].copy(), hsv[..., 2].copy()
+    gate = smoothstep(0.04, 0.3, hsv[..., 1])
+    for center, width, smult, hshift, vmult in adjustments:
+        dh = (hsv[..., 0] - center + 180.0) % 360.0 - 180.0
+        w = np.exp(-0.5 * (dh / width) ** 2) * gate
+        h += w * hshift
+        s *= 1 + (smult - 1) * w
+        v *= 1 + (vmult - 1) * w
+    return hsv2rgb(np.stack([h % 360.0, np.clip(s, 0, 1), np.clip(v, 0, 1)], -1))
+
+
+def grade(x, g=1.15, p=PIVOT, sat=1.0, lift=(0, 0, 0), crush=0.0, gain=(1, 1, 1),
+          gamma=(1, 1, 1), sh=(0, 0, 0), mid=(0, 0, 0), hi=(0, 0, 0), hue=None, mono=None):
+    """Look on display-referred Rec.709. g is the contrast of the finished look relative to the
+    plain neutral input transform (which already carries NEUTRAL_G), so it is divided down."""
+    g = g / NEUTRAL_G
+    x = np.clip(x, 0.0, 1.0)
+    if mono is not None:
+        y = x @ np.array(mono)
+        x = np.stack([y, y, y], -1)
+    if hue:
+        x = hue_adjust(x, hue)
+    x = scurve(x, p, g)
+    if sat != 1.0:
+        y = luma(x)[..., None]
+        x = y + (x - y) * sat
+    x = np.clip(x, 0, 1)
+    x = np.power(x, np.array(gamma))
+    x = x * np.array(gain)
+    y = luma(np.clip(x, 0, 1))
+    ws = 1 - smoothstep(0.0, 0.5, y)
+    wh = smoothstep(0.45, 1.0, y)
+    wm = np.clip(1 - ws - wh, 0, 1)
+    x = (x + ws[..., None] * np.array(sh) + wm[..., None] * np.array(mid)
+         + wh[..., None] * np.array(hi))
+    x = np.clip(x, 0, 1)
+    x = x + np.array(lift) * (1 - x)
+    if crush:
+        x = (x - crush) / (1 - crush)
+    return np.clip(x, 0.0, 1.0)
+
+
+def tint_black(x, floor):
+    y = luma(x)
+    w = (1 - smoothstep(0.0, 0.5, y))[..., None]
+    return np.clip(x + np.array(floor) * (1 - x) * w, 0, 1)
+
+
+LOOKS = {
+    "kodak-portra-400-style": dict(
+        title="Kodak Portra 400 style (approx)",
+        fn=lambda x: grade(x, g=1.03, sat=0.92, lift=(0.036, 0.033, 0.03), gain=(1.0, 0.99, 0.95),
+                           hi=(0.012, 0.006, -0.004),
+                           hue=[(25, 25, 1.06, 0, 1.0), (120, 35, 0.68, 12, 0.97),
+                                (200, 40, 0.85, 0, 1.0), (225, 30, 0.88, 0, 1.0)])),
+    "kodak-ektar-100-style": dict(
+        title="Kodak Ektar 100 style (approx)",
+        fn=lambda x: grade(x, g=1.28, sat=1.25, crush=0.012, gain=(1.0, 0.995, 0.985),
+                           hue=[(0, 25, 1.2, 0, 1.0), (225, 35, 1.15, 0, 0.98), (120, 40, 1.1, 0, 1.0)])),
+    "kodak-gold-200-style": dict(
+        title="Kodak Gold 200 style (approx)",
+        fn=lambda x: grade(x, g=1.12, sat=1.08, gain=(1.0, 0.95, 0.80), lift=(0.04, 0.03, 0.004),
+                           sh=(0.015, 0.008, -0.01), hue=[(225, 35, 0.8, 0, 1.0)])),
+    "kodak-vision3-500t-style": dict(
+        title="Kodak Vision3 500T style (approx)",
+        fn=lambda x: grade(x, g=1.1, sat=0.95, lift=(0.02, 0.025, 0.03), sh=(-0.015, 0.008, 0.025),
+                           hi=(0.03, 0.012, -0.02), gain=(0.98, 0.99, 1.0),
+                           hue=[(120, 40, 0.85, 0, 1.0)])),
+    "kodak-trix-style": dict(
+        title="Kodak Tri-X style (approx, B&W)",
+        fn=lambda x: grade(x, g=1.38, p=0.42, crush=0.008, lift=(0.008, 0.008, 0.008),
+                           mono=(0.30, 0.55, 0.15))),
+    "fuji-velvia-50-style": dict(
+        title="Fuji Velvia 50 style (approx)",
+        fn=lambda x: grade(x, g=1.32, sat=1.45, crush=0.015,
+                           hue=[(0, 25, 1.2, 0, 1.0), (120, 40, 1.2, 0, 1.0), (225, 35, 1.15, 0, 1.0),
+                                (300, 30, 1.1, -8, 1.0)])),
+    "fuji-provia-100-style": dict(
+        title="Fuji Provia 100 style (approx)",
+        fn=lambda x: grade(x, g=1.15, sat=1.1, gain=(0.985, 1.0, 1.0), hue=[(120, 40, 1.05, 0, 1.0)])),
+    "fuji-astia-100-style": dict(
+        title="Fuji Astia 100 style (approx)",
+        fn=lambda x: grade(x, g=1.0, sat=0.93, lift=(0.018, 0.016, 0.014), gain=(1.0, 0.995, 0.985),
+                           hue=[(25, 25, 0.95, 0, 1.0), (120, 40, 0.9, 0, 1.0)])),
+    "fuji-pro-400h-style": dict(
+        title="Fuji Pro 400H style (approx)",
+        fn=lambda x: grade(x, g=0.96, sat=0.85, lift=(0.05, 0.065, 0.065), gamma=(0.96, 0.94, 0.95),
+                           sh=(-0.01, 0.012, 0.014), hi=(0.0, 0.005, 0.01),
+                           hue=[(120, 40, 0.8, 18, 1.0), (0, 25, 0.9, 0, 1.0)])),
+    "fuji-eterna-style": dict(
+        title="Fuji Eterna style (approx)",
+        fn=lambda x: grade(x, g=0.95, sat=0.72, lift=(0.032, 0.034, 0.038), sh=(-0.005, 0.004, 0.01),
+                           hue=[(120, 40, 0.75, 0, 1.0)])),
+    "cinestill-800t-style": dict(
+        title="CineStill 800T style (approx)",
+        fn=lambda x: grade(x, g=1.12, sat=1.05, lift=(0.015, 0.02, 0.03), sh=(-0.02, 0.0, 0.038),
+                           mid=(0.0, -0.003, 0.008), hi=(0.035, 0.005, -0.035), gain=(1.0, 0.99, 0.96))),
+}
+
+FLOORS = {
+    "blacks-red": (0.10, 0.015, 0.02),
+    "blacks-blue": (0.015, 0.03, 0.11),
+    "blacks-teal": (0.01, 0.075, 0.085),
+    "blacks-magenta": (0.08, 0.01, 0.085),
+    "blacks-green": (0.02, 0.10, 0.02),
+    "blacks-amber": (0.10, 0.055, 0.01),
+}
+for _k, _fl in FLOORS.items():
+    LOOKS[_k] = dict(title=f"Tinted blacks {_k.split('-')[1]} (Rec.709 in/out)",
+                     fn=(lambda f: (lambda x: tint_black(x, f)))(_fl))
+
+
+def foggy(x, glow=(0, 0, 0), knee=0.78, glow_lo=0.45, glow_sat=0.28, **kw):
+    """Vivid grade plus fog atmosphere. Fog glow tints pale, low-saturation, bright pixels only, so
+    foliage colour is untouched by it. Shoulder compresses highlights so fog reads as soft light."""
+    x = grade(x, **kw)
+    hsv = rgb2hsv(x)
+    w = smoothstep(glow_lo, 0.92, luma(x)) * (1 - smoothstep(0.02, glow_sat, hsv[..., 1]))
+    x = x + w[..., None] * np.array(glow)
+    return np.clip(shoulder(np.clip(x, 0, 1), knee), 0, 1)
+
+
+BAMBOO_LOOKS = {
+    "misty-emerald": dict(
+        title="Misty emerald (vivid emerald foliage, teal shadows, soft glowing fog)",
+        fn=lambda x: foggy(x, g=0.96, sat=1.12, lift=(0.012, 0.03, 0.036), sh=(-0.025, 0.012, 0.025),
+                           glow=(-0.01, 0.025, 0.03), knee=0.74,
+                           hue=[(120, 38, 1.55, 8, 1.0), (80, 28, 1.45, 14, 1.0), (175, 30, 1.4, 0, 1.0)])),
+    "bamboo-haze": dict(
+        title="Bamboo haze (hard-boosted greens, pale cool fog, matte blacks)",
+        fn=lambda x: foggy(x, g=0.92, sat=1.0, lift=(0.05, 0.056, 0.06), glow=(-0.006, 0.004, 0.016),
+                           knee=0.76,
+                           hue=[(105, 32, 1.85, 4, 1.0), (75, 25, 1.7, 12, 1.0), (140, 30, 1.4, 0, 1.0)])),
+    "golden-fog": dict(
+        title="Golden fog (amber glowing fog against cool green shadows)",
+        fn=lambda x: foggy(x, g=1.0, sat=1.1, gain=(1.03, 1.0, 0.93), lift=(0.01, 0.02, 0.022),
+                           sh=(-0.022, 0.014, 0.0), hi=(0.03, 0.015, -0.03), glow=(0.045, 0.025, -0.025),
+                           knee=0.76,
+                           hue=[(110, 35, 1.4, -4, 1.0), (60, 25, 1.35, 0, 1.0)])),
+    "jade-dream": dict(
+        title="Jade dream (teal-green foliage, magenta-tinted highlights, soft shoulder)",
+        fn=lambda x: foggy(x, g=0.98, sat=1.22, lift=(0.025, 0.03, 0.038), hi=(0.025, -0.012, 0.03),
+                           glow=(0.03, 0.0, 0.035), knee=0.7,
+                           hue=[(115, 38, 1.5, 20, 1.0), (80, 28, 1.45, 24, 1.0), (300, 40, 1.2, 0, 1.0)])),
+    "neon-forest": dict(
+        title="Neon forest (strong teal and magenta-orange split tone, punchy colour)",
+        fn=lambda x: foggy(x, g=1.2, sat=1.5, sh=(-0.045, 0.028, 0.05), hi=(0.07, 0.0, 0.02),
+                           glow=(0.05, -0.01, 0.03), knee=0.8, lift=(0.01, 0.012, 0.02),
+                           hue=[(115, 38, 1.35, 12, 1.0), (25, 28, 1.25, 0, 1.0), (60, 25, 1.25, 0, 1.0)])),
+    "pastel-mist": dict(
+        title="Pastel mist (airy and bright, lifted blacks, pale fog, saturated foliage)",
+        fn=lambda x: foggy(x, g=0.88, sat=0.88, gamma=(0.93, 0.92, 0.93), lift=(0.07, 0.075, 0.082),
+                           glow=(0.005, 0.01, 0.022), knee=0.72, glow_lo=0.4,
+                           hue=[(110, 38, 1.75, 8, 1.0), (80, 28, 1.6, 14, 1.0)])),
+}
+
+
+# ----------------------------------------------------------------------------
+# Input transform: log code -> Rec.709 display
+# ----------------------------------------------------------------------------
+def input_transform(prof, code):
+    lin = prof["dec"](code) @ prof["M"].T
+    disp = oetf709(np.clip(lin, 0.0, None))
+    disp = np.clip(shoulder(disp), 0.0, 1.0)
+    return scurve(disp, PIVOT, NEUTRAL_G)
+
+
+def grid():
+    lin = np.linspace(0.0, 1.0, N)
+    B, G, R = np.meshgrid(lin, lin, lin, indexing="ij")
+    return np.stack([R, G, B], -1)  # [b, g, r, 3]
+
+
+def write_cube(path, title, comments, lut):
+    with open(path, "w") as f:
+        f.write(f'TITLE "{title}"\n')
+        for c in comments:
+            f.write(f"# {c}\n")
+        f.write(f"LUT_3D_SIZE {N}\nDOMAIN_MIN 0.0 0.0 0.0\nDOMAIN_MAX 1.0 1.0 1.0\n")
+        for row in lut.reshape(-1, 3):
+            f.write("%.6f %.6f %.6f\n" % tuple(row))
+
+
+def apply_lut(lut, img):
+    n = lut.shape[0]
+    s = np.clip(img, 0, 1) * (n - 1)
+    i0 = np.minimum(np.floor(s).astype(int), n - 2)
+    f = s - i0
+    r0, g0, b0 = i0[..., 0], i0[..., 1], i0[..., 2]
+    fr, fg, fb = f[..., 0:1], f[..., 1:2], f[..., 2:3]
+
+    def L(db, dg, dr):
+        return lut[b0 + db, g0 + dg, r0 + dr]
+
+    c00 = L(0, 0, 0) * (1 - fr) + L(0, 0, 1) * fr
+    c01 = L(0, 1, 0) * (1 - fr) + L(0, 1, 1) * fr
+    c10 = L(1, 0, 0) * (1 - fr) + L(1, 0, 1) * fr
+    c11 = L(1, 1, 0) * (1 - fr) + L(1, 1, 1) * fr
+    c0 = c00 * (1 - fg) + c01 * fg
+    c1 = c10 * (1 - fg) + c11 * fg
+    return c0 * (1 - fb) + c1 * fb
+
+
+# ----------------------------------------------------------------------------
+# Synthetic scene (defined in linear Rec.709, encoded per camera)
+# ----------------------------------------------------------------------------
+W, H = 320, 192
+ROWS = 6
+
+
+def scene_linear709():
+    img = np.zeros((H, W, 3))
+    rh = H // ROWS
+
+    def put(row, patches):
+        n = len(patches)
+        for i, v in enumerate(patches):
+            img[row * rh:(row + 1) * rh, i * W // n:(i + 1) * W // n] = v
+
+    grey = [0.0, 0.0045, 0.01, 0.0225, 0.045, 0.09, 0.18, 0.36, 0.72]
+    put(0, [(v, v, v) for v in grey])
+    put(1, [(0, 0, 0), (0.004, 0.004, 0.004), (0.36, 0.20, 0.13), (0.12, 0.065, 0.04),
+            (0.07, 0.14, 0.04), (0.12, 0.20, 0.40), (0.30, 0.18, 0.07), (0.72, 0.72, 0.72)])
+    put(2, [(0.25, 0.01, 0.01), (0.01, 0.25, 0.01), (0.01, 0.01, 0.25),
+            (0.25, 0.25, 0.01), (0.01, 0.25, 0.25), (0.25, 0.01, 0.25)])
+    ramp = np.linspace(0.0, 0.9, W)  # scene-linear grey ramp
+    img[3 * rh:4 * rh] = np.power(ramp, 2.0)[None, :, None]
+    hsv = np.stack([np.linspace(0, 360, W, endpoint=False), np.full(W, 0.6), np.full(W, 0.35)], -1)
+    img[4 * rh:5 * rh] = np.power(hsv2rgb(hsv), 2.2)[None, :, :]
+    img[5 * rh:] = np.linspace(0, 0.12, W)[None, :, None]
+    return img
+
+
+def scene_codes(prof, lin709):
+    cam = lin709 @ np.linalg.inv(prof["M"]).T
+    return prof["enc"](np.maximum(cam, 0.0))
+
+
+def patch_set(lin709):
+    """(grey patches, colour patches) arrays of shape (n,3) from the scene definition."""
+    grey = [0.0, 0.0045, 0.01, 0.0225, 0.045, 0.09, 0.18, 0.36, 0.72]
+    grey = np.array([(v, v, v) for v in grey])
+    colour = np.array([(0.36, 0.20, 0.13), (0.12, 0.065, 0.04), (0.07, 0.14, 0.04), (0.12, 0.20, 0.40),
+                       (0.30, 0.18, 0.07), (0.25, 0.01, 0.01), (0.01, 0.25, 0.01), (0.01, 0.01, 0.25),
+                       (0.25, 0.25, 0.01), (0.01, 0.25, 0.25), (0.25, 0.01, 0.25)])
+    return grey, colour
+
+
+def to_u8(x):
+    return (np.clip(x, 0, 1) * 255 + 0.5).astype(np.uint8)
+
+
+BW, BH = 480, 288
+RAMP_Y0, RAMP_Y1 = 258, 274
+PRIM_Y0, PRIM_Y1 = 274, 288
+SKIN_BOX = (24, 214, 74, 254)
+
+
+def bamboo_scene():
+    """Display-referred Rec.709 scene: foggy bamboo grove with a few test patches."""
+    rng = np.random.default_rng(7)
+    yy = np.linspace(0, 1, BH)[:, None, None]
+    fog = np.array([0.80, 0.84, 0.84]) * (1 - yy) + np.array([0.60, 0.67, 0.65]) * yy
+    img = np.broadcast_to(fog, (BH, BW, 3)).copy()
+    stalks = [  # x centre, width, depth (0 near .. 1 far), colour
+        (40, 16, 0.78, (0.30, 0.52, 0.26)), (96, 12, 0.85, (0.50, 0.62, 0.24)),
+        (150, 20, 0.45, (0.26, 0.48, 0.20)), (214, 14, 0.7, (0.46, 0.60, 0.22)),
+        (270, 26, 0.12, (0.22, 0.44, 0.16)), (338, 15, 0.6, (0.52, 0.64, 0.22)),
+        (392, 22, 0.3, (0.27, 0.50, 0.21)), (448, 13, 0.82, (0.34, 0.54, 0.28)),
+    ]
+    xs = np.arange(BW)[None, :]
+    ys = np.arange(BH)[:, None]
+    for cx, wd, depth, col in stalks:
+        d = np.abs(xs - cx) / (wd / 2.0)
+        m = np.clip(1.5 - d * 1.5, 0, 1)  # soft edge
+        shade = 0.72 + 0.28 * np.sqrt(np.clip(1 - np.minimum(d, 1) ** 2, 0, 1))  # round stalk shading
+        node = 1 - 0.25 * np.exp(-((ys % 54 - 27) / 1.6) ** 2)  # node rings
+        c = np.array(col)[None, None, :] * (shade * node)[..., None]
+        c = c * (1 - depth) + fog * depth  # fog between camera and stalk
+        img = img * (1 - m[..., None]) + c * m[..., None]
+    ground = smoothstep(190, 258, np.arange(BH))[:, None, None]  # dark green undergrowth
+    img = img * (1 - 0.8 * ground) + np.array([0.05, 0.11, 0.06]) * 0.8 * ground
+    img += rng.normal(0, 0.004, img.shape)
+    x0, y0, x1, y1 = SKIN_BOX
+    img[y0:y1, x0:x1] = (0.72, 0.52, 0.42)
+    img[y0:y1, 90:140] = (0.05, 0.10, 0.05)  # deep shadow green
+    img[y0:y1, 156:206] = (0.40, 0.45, 0.40)  # neutral mid grey
+    img[RAMP_Y0:RAMP_Y1] = np.linspace(0, 1, BW)[None, :, None]
+    prim = [(0.8, 0.1, 0.1), (0.1, 0.7, 0.15), (0.1, 0.2, 0.85), (0.9, 0.85, 0.15), (0.1, 0.75, 0.8),
+            (0.8, 0.15, 0.75)]
+    for i, c in enumerate(prim):
+        img[PRIM_Y0:PRIM_Y1, i * BW // 6:(i + 1) * BW // 6] = c
+    return np.clip(img, 0, 1)
+
+
+def bamboo_report(name, lut, scene, out):
+    ramp = out[RAMP_Y0:RAMP_Y1].mean(0)
+    lum = ramp @ LUMA
+    d = np.diff(lum)
+    steps = np.unique(to_u8(ramp)[:, 1]).size
+    body = out[:RAMP_Y0 - 50]
+    clip_hi = float((body >= 0.995).any(-1).mean()) * 100
+    clip_lo = float((body <= 0.004).all(-1).mean()) * 100
+    grey = out[RAMP_Y0:RAMP_Y1, BW // 2]
+    x0, y0, x1, y1 = SKIN_BOX
+    print(f"  {name:14s} ramp monotonic={bool((d >= -1e-4).all())} max step={d.max():.4f} "
+          f"levels={steps}/480  clip hi {clip_hi:.2f}% lo {clip_lo:.2f}%  "
+          f"mid-ramp rgb={np.round(grey.mean(0), 3)}  skin={np.round(out[(y0 + y1) // 2, (x0 + x1) // 2], 3)}")
+
+
+def bamboo_sheet(look_luts):
+    scene = bamboo_scene()
+    tiles = [("untouched scene", scene)]
+    print("== bamboo looks on the foggy-bamboo scene (Rec.709 in/out) ==")
+    for name in BAMBOO_LOOKS:
+        out = apply_lut(look_luts[name], scene)
+        bamboo_report(name, look_luts[name], scene, out)
+        tiles.append((name, out))
+    cols, lab = 4, 22
+    rows = (len(tiles) + cols - 1) // cols
+    sheet = Image.new("RGB", (cols * BW, rows * (BH + lab)), (24, 24, 24))
+    dr = ImageDraw.Draw(sheet)
+    try:
+        font = ImageFont.load_default(size=14)
+    except TypeError:
+        font = ImageFont.load_default()
+    for i, (name, arr) in enumerate(tiles):
+        cx, cy = (i % cols) * BW, (i // cols) * (BH + lab)
+        sheet.paste(Image.fromarray(to_u8(arr)), (cx, cy + lab))
+        dr.text((cx + 4, cy + 3), name, fill=(235, 235, 235), font=font)
+    sheet.save(os.path.join(HERE, "bamboo-sheet.png"))
+
+
+def main():
+    for f in glob.glob(os.path.join(OUT, "**", "*.cube"), recursive=True):
+        os.remove(f)
+    os.makedirs(OUT_IN, exist_ok=True)
+    os.makedirs(OUT_LOOK, exist_ok=True)
+    g = grid()
+
+    # --- matrix checks -------------------------------------------------
+    print("== gamut matrices: derived from published primaries vs manufacturer matrix ==")
+    for nm, prim, pub in [("S-Gamut3.Cine", PSGAMUT3CINE, M_SGAMUT3CINE_PUB),
+                          ("V-Gamut", PVGAMUT, M_VGAMUT_PUB), ("D-Gamut", PDGAMUT, M_DGAMUT_PUB)]:
+        d = np.abs(derive_to_709(prim) - pub).max()
+        print(f"  {nm}: max |derived - published| = {d:.5f}; row sums published = {np.round(pub.sum(1), 6)}")
+    for nm in ("fujifilm-flog-to-rec709", "nikon-nlog-to-rec709"):
+        print(f"  {nm}: BT.2020->709 derived, row sums {np.round(PROFILES[nm]['M'].sum(1), 6)}")
+
+    # --- input transforms ----------------------------------------------
+    in_luts = {}
+    for name, prof in PROFILES.items():
+        lut = np.clip(input_transform(prof, g), 0.0, 1.0)
+        in_luts[name] = lut
+        write_cube(os.path.join(OUT_IN, name + ".cube"), f"{prof['title']} to Rec.709",
+                   [f"Input: {prof['title']}, normalized 10-bit code value / 1023. Output: Rec.709 display.",
+                    f"Source: {prof['source']}.",
+                    "Technical transform: log decode, gamut to Rec.709, Rec.709 OETF, soft highlight shoulder (knee 0.85),",
+                    "gentle S-curve (g=1.15) pivoting on 18% grey = 0.409. No creative look."], lut)
+    ident = g.copy()
+    write_cube(os.path.join(OUT_IN, "rec709-passthrough.cube"), "Rec.709 passthrough (identity)",
+               ["Identity LUT for footage that is already graded to Rec.709."], ident)
+
+    # --- looks ----------------------------------------------------------
+    look_luts = {}
+    for name, look in LOOKS.items():
+        lut = np.clip(look["fn"](g), 0.0, 1.0)
+        look_luts[name] = lut
+        write_cube(os.path.join(OUT_LOOK, name + ".cube"), look["title"],
+                   ["Input and output: Rec.709 display-referred. Apply after any input transform.",
+                    "Names ending -style are approximations, not measured or official stock profiles."], lut)
+
+    for name, look in BAMBOO_LOOKS.items():
+        lut = np.clip(look["fn"](g), 0.0, 1.0)
+        look_luts[name] = lut
+        write_cube(os.path.join(OUT_LOOK, name + ".cube"), look["title"],
+                   ["Input and output: Rec.709 display-referred. Apply after any input transform.",
+                    "Vivid looks for foggy foliage. Tone and colour only: a LUT cannot blur or add bloom."], lut)
+
+    # --- anchor checks vs published code values ---------------------------
+    print("== log anchors: computed 10-bit code vs published ==")
+    for name, prof in PROFILES.items():
+        parts = []
+        for refl, pub in prof["anchors"].items():
+            parts.append(f"{int(refl * 100)}%: {float(prof['enc'](np.array(refl))) * 1023:.1f} (published {pub})")
+        if name == "nikon-nlog-to-rec709":
+            parts.append(f"18%: {float(prof['enc'](np.array(0.18))) * 1023:.1f} (no table; formula only)")
+        print(f"  {prof['label']}: " + ", ".join(parts))
+
+    # --- neutral behaviour ---------------------------------------------
+    print("== neutral behaviour per input transform (grey 18% / black), want ~0.409 / ~0 ==")
+    for name, prof in PROFILES.items():
+        lut = in_luts[name]
+        g18 = apply_lut(lut, prof["enc"](np.array([[0.18, 0.18, 0.18]])))[0]
+        blk = apply_lut(lut, prof["enc"](np.array([[0.0, 0.0, 0.0]])))[0]
+        print(f"  {prof['label']}: grey {np.round(g18, 4)}, black {np.round(blk, 4)}")
+
+    # --- cross-camera agreement vs S-Log3 -----------------------------
+    ref = PROFILES["sony-slog3-to-rec709"]
+    grey_p, colour_p = patch_set(None)
+    print("== cross-camera agreement vs S-Log3 through the LUTs (max error, 10-bit code values) ==")
+    print("   (same linear Rec.709 patches encoded with each camera's own log + gamut)")
+    for name, prof in PROFILES.items():
+        if name == "sony-slog3-to-rec709":
+            continue
+        res = {}
+        for label, patches in (("grey", grey_p), ("colour", colour_p)):
+            a = apply_lut(in_luts["sony-slog3-to-rec709"], scene_codes(ref, patches))
+            b = apply_lut(in_luts[name], scene_codes(prof, patches))
+            res[label] = np.abs(a - b).max() * 1023
+        exact = np.abs(
+            input_transform(prof, scene_codes(prof, np.vstack([grey_p, colour_p])))
+            - apply_lut(in_luts[name], scene_codes(prof, np.vstack([grey_p, colour_p])))).max() * 1023
+        print(f"  {prof['label']:7s}: grey {res['grey']:.2f}, colour {res['colour']:.2f}; "
+              f"own-LUT interpolation error {exact:.2f}")
+    lutref = apply_lut(in_luts["sony-slog3-to-rec709"], scene_codes(ref, np.vstack([grey_p, colour_p])))
+    exactref = input_transform(ref, scene_codes(ref, np.vstack([grey_p, colour_p])))
+    print(f"  S-Log3 own-LUT interpolation error: {np.abs(lutref - exactref).max() * 1023:.2f}")
+
+    # --- blacks-* check --------------------------------------------------
+    print("== blacks-* through S-Log3 input transform: black patch ==")
+    blk_code = ref["enc"](np.array([[0.0, 0.0, 0.0]]))
+    base = apply_lut(in_luts["sony-slog3-to-rec709"], blk_code)
+    for k, fl in FLOORS.items():
+        out = apply_lut(look_luts[k], base)[0]
+        print(f"  {k}: black -> {np.round(out, 3)} target {fl}")
+
+    # --- contact sheet -------------------------------------------------
+    scene = scene_linear709()
+    tiles = []
+    for name, prof in PROFILES.items():
+        tiles.append((f"{prof['label']} -> input LUT", apply_lut(in_luts[name], scene_codes(prof, scene))))
+    base_img = apply_lut(in_luts["sony-slog3-to-rec709"], scene_codes(ref, scene))
+    for name in LOOKS:
+        tiles.append((f"S-Log3 + {name}", apply_lut(look_luts[name], base_img)))
+    cols = 6
+    rows = (len(tiles) + cols - 1) // cols
+    lab = 22
+    sheet = Image.new("RGB", (cols * W, rows * (H + lab)), (24, 24, 24))
+    d = ImageDraw.Draw(sheet)
+    try:
+        font = ImageFont.load_default(size=13)
+    except TypeError:
+        font = ImageFont.load_default()
+    for i, (name, arr) in enumerate(tiles):
+        cx, cy = (i % cols) * W, (i // cols) * (H + lab)
+        sheet.paste(Image.fromarray(to_u8(arr)), (cx, cy + lab))
+        d.text((cx + 4, cy + 3), name, fill=(235, 235, 235), font=font)
+    sheet.save(os.path.join(HERE, "contact-sheet.png"))
+    bamboo_sheet(look_luts)
+    print(f"wrote {len(PROFILES) + 1} input LUTs, {len(LOOKS) + len(BAMBOO_LOOKS)} looks, "
+          "contact-sheet.png, bamboo-sheet.png")
+
+
+if __name__ == "__main__":
+    main()
