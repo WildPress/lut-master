@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="surface_container">#FF1D2024</color>
+    <color name="surface_container_high">#FF282A2F</color>
+    <color name="surface_container_highest">#FF33353A</color>
+    <color name="on_surface_dim">#FF8E9099</color>
+    <color name="export_green">#FF81C784</color>
+    <color name="export_green_dark">#FF2E7D32</color>
+    <color name="section_header">#FF8899AA</color>
+</resources>

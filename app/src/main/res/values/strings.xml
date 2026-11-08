@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">LUT Master</string>
+    <string name="pick_video">Open Video</string>
+    <string name="export">Export</string>
+    <string name="load_look_cube">Load Look .cube</string>
+    <string name="load_input_cube">Load Input .cube</string>
+    <string name="input_profile">Input Profile</string>
+    <string name="full_lut_skip_input">Full LUT (skip input)</string>
+    <string name="hold_to_compare">Hold for original</string>
+    <string name="diagnostics">Diagnostics</string>
+    <string name="keep_colour_tags">Keep file colour tags</string>
+    <string name="show_diag_items">Show DIAG test items</string>
+    <string name="advanced_settings">Advanced</string>
+    <string name="remove">Remove</string>
+</resources>

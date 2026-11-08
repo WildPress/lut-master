@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Three overlapping colour circles (RGB/LUT motif) -->
+    <path android:pathData="M46,36 a18,18 0 1,1 0.01,0">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="46"
+                android:centerY="36"
+                android:gradientRadius="18">
+                <item android:offset="0.0" android:color="#CCEF5350" />
+                <item android:offset="1.0" android:color="#44EF5350" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:pathData="M62,36 a18,18 0 1,1 0.01,0">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="62"
+                android:centerY="36"
+                android:gradientRadius="18">
+                <item android:offset="0.0" android:color="#CC66BB6A" />
+                <item android:offset="1.0" android:color="#4466BB6A" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:pathData="M54,50 a18,18 0 1,1 0.01,0">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="54"
+                android:centerY="50"
+                android:gradientRadius="18">
+                <item android:offset="0.0" android:color="#CC42A5F5" />
+                <item android:offset="1.0" android:color="#4442A5F5" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Film strip perforations (top and bottom) -->
+    <path
+        android:fillColor="#33FFFFFF"
+        android:pathData="M28,24h4v3h-4z M36,24h4v3h-4z M44,24h4v3h-4z M52,24h4v3h-4z M60,24h4v3h-4z M68,24h4v3h-4z M76,24h4v3h-4z" />
+    <path
+        android:fillColor="#33FFFFFF"
+        android:pathData="M28,81h4v3h-4z M36,81h4v3h-4z M44,81h4v3h-4z M52,81h4v3h-4z M60,81h4v3h-4z M68,81h4v3h-4z M76,81h4v3h-4z" />
+
+    <!-- "LUT" text -->
+    <path
+        android:fillColor="#E0E0E0"
+        android:pathData="M34,72 v8 h3 v-2 h4 v2 h0 v-8z M37,74 v4 h-0 v-4z
+            M44,72 v6 a2,2 0 0,0 4,0 v-6 h-1.5 v6 a0.5,0.5 0 0,1 -1,0 v-6z
+            M52,72 v1.5 h2 v6.5 h1.5 v-6.5 h2 v-1.5z" />
+</vector>

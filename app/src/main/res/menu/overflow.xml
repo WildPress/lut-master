@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/menu_load_look"
+        android:title="@string/load_look_cube" />
+    <item
+        android:id="@+id/menu_load_input"
+        android:title="@string/load_input_cube" />
+    <item
+        android:id="@+id/menu_full_lut"
+        android:checkable="true"
+        android:title="@string/full_lut_skip_input" />
+    <item
+        android:id="@+id/menu_keep_colour"
+        android:checkable="true"
+        android:title="@string/keep_colour_tags" />
+    <item
+        android:id="@+id/menu_show_diag"
+        android:checkable="true"
+        android:title="@string/show_diag_items" />
+</menu>
