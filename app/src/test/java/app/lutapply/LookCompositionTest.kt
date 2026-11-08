@@ -3,6 +3,7 @@ package app.lutapply
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 class LookCompositionTest {
@@ -28,6 +29,10 @@ class LookCompositionTest {
 
     @Test
     fun realSamsungPlusBambooHazeDoesNotCollapseToIdentity() {
+        assumeTrue(
+            "Samsung LUT is not bundled in this checkout",
+            File("src/main/assets/luts/input/samsung-log-to-rec709.cube").exists(),
+        )
         val samsung = load("src/main/assets/luts/input/samsung-log-to-rec709.cube")
         val bamboo = load("src/main/assets/luts/looks/bamboo-haze.cube")
         val composed = LutMath.compose(samsung, bamboo, 33)
