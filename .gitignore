@@ -1,0 +1,16 @@
+.gradle/
+.kotlin/
+build/
+app/build/
+local.properties
+*.apk
+.idea/
+*.iml
+.DS_Store
+
+# Samsung's Log to Rec709 LUT is downloaded from Samsung (sign-in required) and is not redistributed here.
+app/src/main/assets/luts/input/samsung-log-to-rec709.cube
+
+# Regenerate with: docker build -t lut-master-ffmpeg -f Dockerfile.ffmpeg .
+test-assets/*.mp4
+.signing/
