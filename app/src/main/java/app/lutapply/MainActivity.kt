@@ -1,6 +1,5 @@
 package app.lutapply
 
-import android.app.AlertDialog
 import android.content.ContentValues
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
@@ -12,14 +11,14 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import android.provider.OpenableColumns
-import android.view.MotionEvent
 import android.view.View
-import android.widget.ArrayAdapter
-import android.widget.AutoCompleteTextView
-import android.widget.ImageView
 import android.widget.TextView
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -41,20 +40,23 @@ import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
-import androidx.media3.ui.PlayerControlView
 import androidx.media3.ui.PlayerView
-import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.chip.Chip
+import com.google.android.material.chip.ChipGroup
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.google.android.material.snackbar.Snackbar
-import com.google.android.material.textfield.TextInputLayout
 import java.io.File
+import java.io.InputStream
 import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
+// path: bundled asset (null for Raw and for loaded files). cube/file: a user-loaded input LUT kept in filesDir/inputs.
 private class InputEntry(
     val name: String,
     val path: String?,
@@ -74,27 +76,35 @@ private class InputEntry(
     val isSamsung get() = path?.contains("samsung-log", ignoreCase = true) == true
 }
 
-private sealed class LookItem(val name: String) {
-    object Original : LookItem("Original (input only)")
-    class Asset(name: String, val path: String) : LookItem(name)
-    class External(name: String, val cube: FloatCube, val full: Boolean, val id: Int) : LookItem(name)
-    class Diag(name: String, val kind: Int) : LookItem(name)
+private sealed class LookItem(val name: String, val category: String) {
+    object Original : LookItem("No look", "")
+    class Asset(name: String, val path: String, category: String) : LookItem(name, category)
+    class External(name: String, val cube: FloatCube, val full: Boolean, val id: Int) : LookItem(name, LookCategories.MY_LUTS)
+    // Diagnostic effects that bypass the input transform and every LUT file.
+    class Diag(name: String, val kind: Int) : LookItem(name, LookCategories.DIAGNOSTICS)
+
+    val favKey: String? get() = when (this) {
+        is Asset -> path
+        is External -> "external:$name"
+        else -> null
+    }
 }
 
 @UnstableApi
 class MainActivity : AppCompatActivity() {
     private lateinit var player: ExoPlayer
+    private lateinit var playerView: PlayerView
     private lateinit var status: TextView
     private lateinit var debug: TextView
     private lateinit var progress: LinearProgressIndicator
     private lateinit var exportButton: MaterialButton
+    private lateinit var profileButton: MaterialButton
+    private lateinit var chips: ChipGroup
     private lateinit var looksList: RecyclerView
     private lateinit var looksAdapter: LooksAdapter
-    private lateinit var inputDropdown: AutoCompleteTextView
-    private lateinit var inputLayout: TextInputLayout
-    private lateinit var removeInputButton: MaterialButton
     private lateinit var placeholder: TextView
     private lateinit var compareBadge: TextView
+    private lateinit var backCallback: OnBackPressedCallback
     private var loadedInputCount = 0
 
     private val inputs = ArrayList<InputEntry>()
@@ -109,6 +119,7 @@ class MainActivity : AppCompatActivity() {
     private var transformer: Transformer? = null
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
+    private val thumbIo = Executors.newSingleThreadExecutor()
     private val prefs by lazy { getSharedPreferences("lutapply", MODE_PRIVATE) }
 
     private var currentCube: Array<Array<IntArray>>? = null
@@ -125,25 +136,21 @@ class MainActivity : AppCompatActivity() {
     private var advDiag = false
     private var fullLut = false
     private var comparing = false
-    private var thumbnailFrame: Bitmap? = null
+    private var fullscreen = false
+    private var profileDetected = false
+    private var categoryFilter = FILTER_ALL
+    private val favourites = HashSet<String>()
+
+    private var thumbFrame: Bitmap? = null
+    private var thumbFrameMs = -1L
+    @Volatile private var thumbGeneration = 0
+    private val captureThumb = Runnable {
+        val ms = player.currentPosition
+        if (abs(ms - thumbFrameMs) > 50) captureThumbnailFrame(ms)
+    }
 
     private val pickVideo = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            videoUri = uri
-            firstFrame = false
-            effectsDisabled = false
-            placeholder.visibility = View.GONE
-            player.setVideoEffects(currentEffects)
-            effectsApplied++
-            player.setMediaItem(MediaItem.fromUri(uri))
-            player.prepare()
-            player.playWhenReady = true
-            updateExportEnabled()
-            applySelection()
-            updateDebug()
-            thumbnailFrame = null
-            main.postDelayed({ captureThumbnailFrame() }, 500)
-        }
+        if (uri != null) openVideo(uri)
     }
 
     private val pickLut = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -159,17 +166,20 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
         debug = findViewById(R.id.debug)
-        removeInputButton = findViewById(R.id.removeInput)
         progress = findViewById(R.id.progress)
         exportButton = findViewById(R.id.export)
+        profileButton = findViewById(R.id.profileButton)
+        chips = findViewById(R.id.categoryChips)
         looksList = findViewById(R.id.looksList)
-        inputDropdown = findViewById(R.id.inputDropdown)
-        inputLayout = findViewById(R.id.inputLayout)
         placeholder = findViewById(R.id.placeholder)
         compareBadge = findViewById(R.id.compareBadge)
+        playerView = findViewById(R.id.player)
 
         advKeepColour = prefs.getBoolean("adv_keepcolour", false)
         advDiag = prefs.getBoolean("adv_diag", false)
+        favourites.addAll(prefs.getStringSet("favourites", emptySet()) ?: emptySet())
+        categoryFilter = prefs.getString("filter", FILTER_ALL) ?: FILTER_ALL
+        debug.visibility = if (advDiag) View.VISIBLE else View.GONE
 
         setupToolbar()
 
@@ -191,32 +201,57 @@ class MainActivity : AppCompatActivity() {
 
             override fun onTracksChanged(tracks: Tracks) = updateDebug()
 
+            // Thumbnails follow the paused frame.
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (!isPlaying) scheduleThumbCapture()
+            }
+
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo,
+                reason: Int,
+            ) {
+                if (reason == Player.DISCONTINUITY_REASON_SEEK && !player.isPlaying) scheduleThumbCapture()
+            }
+
             override fun onPlayerError(error: PlaybackException) {
                 errorCount++
                 val cause = error.cause?.let { " / ${it.javaClass.simpleName}: ${it.message}" } ?: ""
                 val msg = "${error.errorCodeName}: ${error.message}$cause"
                 if (!effectsDisabled) {
+                    // Retry once without effects so the video still plays.
                     effectsDisabled = true
                     val position = player.currentPosition
                     player.setVideoEffects(emptyList())
                     player.seekTo(position)
                     player.prepare()
                     player.playWhenReady = true
-                    setStatus("Preview error, LUT preview off: $msg")
+                    setStatus("Preview error, LUT preview off (plain video shown): $msg")
                 } else {
                     setStatus("Playback error: $msg")
                 }
                 updateDebug()
             }
         })
-        findViewById<PlayerView>(R.id.player).player = player
+        playerView.player = player
+        playerView.setFullscreenButtonClickListener { setFullscreen(it) }
 
-        val controls = findViewById<PlayerControlView>(R.id.controls)
-        controls.player = player
-        controls.setShowTimeoutMs(0)
-        controls.show()
+        findViewById<HoldToCompareLayout>(R.id.playerHolder).apply {
+            onHoldStart = {
+                if (videoUri != null && !effectsDisabled) {
+                    startCompare()
+                    true
+                } else {
+                    false
+                }
+            }
+            onHoldEnd = { endCompare() }
+        }
+        backCallback = object : OnBackPressedCallback(false) {
+            override fun handleOnBackPressed() = setFullscreen(false)
+        }
+        onBackPressedDispatcher.addCallback(this, backCallback)
 
-        setupTapAndCompare()
         setupInputs()
         setupLooks()
         applySelection()
@@ -231,6 +266,7 @@ class MainActivity : AppCompatActivity() {
         transformer?.cancel()
         player.release()
         io.shutdown()
+        thumbIo.shutdownNow()
         super.onDestroy()
     }
 
@@ -238,20 +274,28 @@ class MainActivity : AppCompatActivity() {
         val toolbar = findViewById<MaterialToolbar>(R.id.toolbar)
         toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
+                R.id.menu_help -> {
+                    MaterialAlertDialogBuilder(this)
+                        .setTitle(R.string.how_it_works)
+                        .setMessage(R.string.help_text)
+                        .setPositiveButton(android.R.string.ok, null)
+                        .show()
+                    true
+                }
                 R.id.menu_load_look -> { pickLut.launch(arrayOf("*/*")); true }
-                R.id.menu_load_input -> { pickInputLut.launch(arrayOf("*/*")); true }
                 R.id.menu_full_lut -> {
                     fullLut = !fullLut
                     item.isChecked = fullLut
                     true
                 }
+                // The player is built once per screen, so these take effect by recreating the activity.
                 R.id.menu_keep_colour -> {
-                    prefs.edit().putBoolean("adv_keepcolour", !item.isChecked).apply()
+                    prefs.edit().putBoolean("adv_keepcolour", !advKeepColour).apply()
                     recreate()
                     true
                 }
                 R.id.menu_show_diag -> {
-                    prefs.edit().putBoolean("adv_diag", !item.isChecked).apply()
+                    prefs.edit().putBoolean("adv_diag", !advDiag).apply()
                     recreate()
                     true
                 }
@@ -262,97 +306,180 @@ class MainActivity : AppCompatActivity() {
         toolbar.menu.findItem(R.id.menu_show_diag)?.isChecked = advDiag
     }
 
-    private fun setupTapAndCompare() {
-        val tapLayer = findViewById<View>(R.id.tapLayer)
-        tapLayer.setOnClickListener { togglePlayPause() }
-        tapLayer.setOnLongClickListener {
-            if (videoUri != null && !effectsDisabled) {
-                startCompare()
-            }
-            true
+    private fun openVideo(uri: Uri) {
+        videoUri = uri
+        firstFrame = false
+        effectsDisabled = false
+        placeholder.visibility = View.GONE
+        // Media3 requires setVideoEffects at least once before prepare() to set up the effects pipeline.
+        player.setVideoEffects(currentEffects)
+        effectsApplied++
+        player.setMediaItem(MediaItem.fromUri(uri))
+        player.prepare()
+        player.playWhenReady = true
+        thumbFrame = null
+        thumbFrameMs = -1L
+        thumbGeneration++
+        looksAdapter.clearThumbnails()
+        captureThumbnailFrame(500L)
+        detectProfile(uri)
+        updateExportEnabled()
+        applySelection()
+        updateDebug()
+    }
+
+    private fun setFullscreen(on: Boolean) {
+        if (fullscreen == on) return
+        fullscreen = on
+        val vis = if (on) View.GONE else View.VISIBLE
+        for (id in intArrayOf(R.id.toolbar, R.id.profileRow, R.id.chipScroll, R.id.looksList, R.id.status, R.id.bottomBar)) {
+            findViewById<View>(id).visibility = vis
         }
-        tapLayer.setOnTouchListener { _, event ->
-            if (comparing && event.action == MotionEvent.ACTION_UP) {
-                endCompare()
-            }
-            false
+        if (advDiag) debug.visibility = vis
+        playerView.setFullscreenButtonState(on)
+        backCallback.isEnabled = on
+        val bars = WindowCompat.getInsetsController(window, window.decorView)
+        if (on) {
+            bars.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            bars.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            bars.show(WindowInsetsCompat.Type.systemBars())
         }
     }
 
     private fun startCompare() {
         comparing = true
         compareBadge.visibility = View.VISIBLE
-        val position = player.currentPosition
-        val playing = player.playWhenReady
-        player.setVideoEffects(effectList(null))
-        if (player.mediaItemCount > 0) player.seekTo(position)
-        player.playWhenReady = playing
+        swapEffects(effectList(null))
     }
 
     private fun endCompare() {
         comparing = false
         compareBadge.visibility = View.GONE
-        val position = player.currentPosition
-        val playing = player.playWhenReady
-        player.setVideoEffects(currentEffects)
-        if (player.mediaItemCount > 0) player.seekTo(position)
-        player.playWhenReady = playing
+        swapEffects(currentEffects)
     }
 
-    private fun togglePlayPause() {
-        if (player.mediaItemCount == 0) return
-        if (player.playbackState == Player.STATE_ENDED) {
-            player.seekTo(0)
-            player.play()
-        } else if (player.playWhenReady) {
-            player.pause()
-        } else {
-            player.play()
+    private fun swapEffects(effects: List<Effect>) {
+        val position = player.currentPosition
+        val playing = player.playWhenReady
+        player.setVideoEffects(effects)
+        effectsApplied++
+        if (player.mediaItemCount > 0 && player.playbackState != Player.STATE_IDLE) {
+            // A paused player only redraws on a new frame, so seek to the same position to push one through.
+            if (!playing || abs(player.currentPosition - position) > 300) player.seekTo(position)
         }
+        player.playWhenReady = playing
+        updateDebug()
     }
 
     private fun assetCubes(dir: String): List<String> =
         (assets.list(dir) ?: emptyArray()).filter { it.endsWith(".cube", ignoreCase = true) }.sorted()
 
+    // ---- Camera profile ----------------------------------------------------------------------
+
     private fun setupInputs() {
         assetCubes("luts/input").forEach { inputs.add(InputEntry(LutNames.pretty(it), "luts/input/$it")) }
+        // Input LUTs the user loaded earlier (kept in app-private storage, never bundled).
         storedInputFiles().forEach { f ->
             try {
                 val cube = CubeParser.parseFloat(f.readText())
                 inputs.add(InputEntry(LutNames.pretty(f.name) + " (loaded)", null, cube, ++loadedInputCount, f))
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                // A stored file that no longer parses can't be removed from the UI, so delete it.
                 f.delete()
             }
         }
         inputs.add(InputEntry("Raw (no transform)", null))
         val saved = prefs.getString("input", null)
+        // A saved choice wins, then the bundled Samsung Log LUT, then the Rec.709 passthrough.
         selectedInput = inputs.indexOfFirst { it.key == saved }.takeIf { it >= 0 }
             ?: inputs.indexOfFirst { it.isSamsung }.takeIf { it >= 0 }
             ?: inputs.indexOfFirst { it.isPassthrough }.takeIf { it >= 0 }
             ?: 0
+        profileButton.setOnClickListener { showProfilePicker() }
+        updateProfileButton()
+    }
 
-        val adapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, inputs.map { it.name })
-        inputDropdown.setAdapter(adapter)
-        inputDropdown.setText(inputs[selectedInput].name, false)
-        inputDropdown.setOnItemClickListener { _, _, position, _ ->
-            if (position == selectedInput) return@setOnItemClickListener
-            selectedInput = position
-            prefs.edit().putString("input", inputs[position].key).apply()
-            onInputChanged()
-        }
-        removeInputButton.setOnClickListener { confirmRemoveInput() }
-        updateRemoveButton()
+    private fun updateProfileButton() {
+        val name = inputs[selectedInput].name
+        profileButton.text = if (profileDetected) "$name ${getString(R.string.detected_suffix)}" else name
+    }
+
+    private fun selectInput(index: Int, detected: Boolean = false) {
+        val changed = index != selectedInput
+        selectedInput = index
+        profileDetected = detected
+        prefs.edit().putString("input", inputs[index].key).apply()
+        updateProfileButton()
+        if (changed) onInputChanged()
     }
 
     private fun onInputChanged() {
-        updateRemoveButton()
         updateExportEnabled()
         applySelection()
         regenerateThumbnails()
     }
 
-    private fun updateRemoveButton() {
-        removeInputButton.visibility = if (inputs[selectedInput].isLoaded) View.VISIBLE else View.GONE
+    private fun showProfilePicker() {
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.camera_profile)
+            .setSingleChoiceItems(inputs.map { it.name }.toTypedArray(), selectedInput) { d, which ->
+                d.dismiss()
+                selectInput(which)
+            }
+            .setNeutralButton(R.string.load_input_cube) { _, _ -> pickInputLut.launch(arrayOf("*/*")) }
+        if (inputs[selectedInput].isLoaded) dialog.setNegativeButton(R.string.remove) { _, _ -> confirmRemoveInput() }
+        dialog.show()
+    }
+
+    private fun detectProfile(uri: Uri) {
+        io.execute {
+            val fragment = try {
+                ProfileDetector.detect(readEnds(uri))
+            } catch (e: Exception) {
+                null
+            }
+            main.post {
+                if (uri != videoUri) return@post
+                val index = fragment?.let { f -> inputs.indexOfFirst { it.path?.contains(f, ignoreCase = true) == true } } ?: -1
+                if (index >= 0) {
+                    selectInput(index, detected = true)
+                } else {
+                    profileDetected = false
+                    updateProfileButton()
+                    Snackbar.make(snackbarAnchor(), getString(R.string.not_detected, inputs[selectedInput].name), Snackbar.LENGTH_LONG)
+                        .setAction(R.string.change) { showProfilePicker() }
+                        .show()
+                }
+            }
+        }
+    }
+
+    // Camera metadata can sit at either end of an MP4 (moov first or last), so read both ends.
+    private fun readEnds(uri: Uri): ByteArray {
+        val size = contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: -1L
+        contentResolver.openInputStream(uri)!!.use { s ->
+            val head = readUpTo(s, SCAN_BYTES)
+            if (size in 0..(2L * SCAN_BYTES)) return head + readUpTo(s, SCAN_BYTES)
+            var toSkip = if (size > 0) size - SCAN_BYTES - head.size else 0L
+            while (toSkip > 0) {
+                val n = s.skip(toSkip)
+                if (n <= 0) break
+                toSkip -= n
+            }
+            return head + readUpTo(s, SCAN_BYTES)
+        }
+    }
+
+    private fun readUpTo(s: InputStream, n: Int): ByteArray {
+        val buf = ByteArray(n)
+        var off = 0
+        while (off < n) {
+            val r = s.read(buf, off, n - off)
+            if (r < 0) break
+            off += r
+        }
+        return buf.copyOf(off)
     }
 
     private fun storedInputFiles(): List<File> =
@@ -361,69 +488,215 @@ class MainActivity : AppCompatActivity() {
     private fun confirmRemoveInput() {
         val entry = inputs[selectedInput]
         if (!entry.isLoaded) return
-        AlertDialog.Builder(this)
+        MaterialAlertDialogBuilder(this)
             .setMessage("Remove ${entry.name} from this app? You can load it again from the file.")
-            .setPositiveButton("Remove") { _, _ -> removeInput(entry) }
-            .setNegativeButton("Cancel", null)
+            .setPositiveButton(R.string.remove) { _, _ -> removeInput(entry) }
+            .setNegativeButton(android.R.string.cancel, null)
             .show()
     }
 
     private fun removeInput(entry: InputEntry) {
         entry.file?.delete()
         inputs.remove(entry)
-        val adapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, inputs.map { it.name })
-        inputDropdown.setAdapter(adapter)
         selectedInput = inputs.indexOfFirst { it.isPassthrough }.takeIf { it >= 0 } ?: 0
+        profileDetected = false
         prefs.edit().putString("input", inputs[selectedInput].key).apply()
-        inputDropdown.setText(inputs[selectedInput].name, false)
+        updateProfileButton()
         onInputChanged()
+    }
+
+    // ---- Looks -------------------------------------------------------------------------------
+
+    // Looks live in luts/looks/<category>/ folders. Files directly in luts/looks are placed by name.
+    private fun discoverLooks(): List<LookItem.Asset> {
+        val out = ArrayList<LookItem.Asset>()
+        for (entry in (assets.list("luts/looks") ?: emptyArray()).sorted()) {
+            if (entry.endsWith(".cube", ignoreCase = true)) {
+                out.add(LookItem.Asset(LutNames.pretty(entry), "luts/looks/$entry", LookCategories.categorise(entry)))
+            } else {
+                val category = LookCategories.folderTitle(entry)
+                assetCubes("luts/looks/$entry").forEach {
+                    out.add(LookItem.Asset(LutNames.pretty(it), "luts/looks/$entry/$it", category))
+                }
+            }
+        }
+        return out
     }
 
     private fun setupLooks() {
         looks.add(LookItem.Original)
-        assetCubes("luts/looks").forEach { looks.add(LookItem.Asset(LutNames.pretty(it), "luts/looks/$it")) }
+        looks.addAll(discoverLooks())
         if (advDiag) {
             looks.add(LookItem.Diag("DIAG 1: swap colour channels (RgbMatrix)", 1))
             looks.add(LookItem.Diag("DIAG 2: invert colours (SingleColorLut)", 2))
         }
-
-        looksAdapter = LooksAdapter { index ->
-            selectedLook = index
-            looksAdapter.selectedIndex = index
-            updateExportEnabled()
-            applySelection()
+        looksAdapter = LooksAdapter(
+            onSelected = { selectLook(it) },
+            onToggleFavourite = { toggleFavourite(it) },
+            isFavourite = { it in favourites },
+        )
+        val span = maxOf(3, (resources.configuration.screenWidthDp - 16) / 116)
+        looksList.layoutManager = GridLayoutManager(this, span).apply {
+            spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
+                override fun getSpanSize(position: Int) = if (looksAdapter.isHeader(position)) span else 1
+            }
         }
-        looksList.layoutManager = LinearLayoutManager(this)
         looksList.adapter = looksAdapter
-        looksAdapter.selectedIndex = 0
+        looksAdapter.selectedIndex = selectedLook
+        rebuildChips()
         rebuildLooksRows()
     }
 
-    private fun rebuildLooksRows() {
-        val rows = ArrayList<LooksRow>()
-        val grouped = LinkedHashMap<String, ArrayList<Pair<Int, LookItem>>>()
+    private fun selectLook(index: Int) {
+        selectedLook = index
+        looksAdapter.selectedIndex = index
+        updateExportEnabled()
+        applySelection()
+    }
 
-        for ((index, look) in looks.withIndex()) {
-            val group = when (look) {
-                is LookItem.Original -> "Original"
-                is LookItem.Asset -> LookCategories.categorise(look.path)
-                is LookItem.External -> "External"
-                is LookItem.Diag -> "Diagnostics"
-            }
-            grouped.getOrPut(group) { ArrayList() }.add(index to look)
+    private fun toggleFavourite(key: String) {
+        if (!favourites.remove(key)) favourites.add(key)
+        prefs.edit().putStringSet("favourites", HashSet(favourites)).apply()
+        if (categoryFilter == FILTER_FAVS) rebuildLooksRows()
+    }
+
+    private fun sortedCategories(): List<String> =
+        looks.map { it.category }.filter { it.isNotEmpty() }.distinct()
+            .sortedWith(compareBy({ LookCategories.sortKey(it) }, { it }))
+
+    private fun rebuildChips() {
+        chips.setOnCheckedStateChangeListener(null)
+        chips.removeAllViews()
+        val filters = listOf(FILTER_ALL, FILTER_FAVS) + sortedCategories()
+        if (categoryFilter !in filters) categoryFilter = FILTER_ALL
+        for (f in filters) {
+            chips.addView(Chip(this).apply {
+                id = View.generateViewId()
+                tag = f
+                text = when (f) {
+                    FILTER_ALL -> getString(R.string.chip_all)
+                    FILTER_FAVS -> getString(R.string.chip_favourites)
+                    else -> f
+                }
+                isCheckable = true
+                isCheckedIconVisible = false
+                isChecked = f == categoryFilter
+            })
         }
+        chips.setOnCheckedStateChangeListener { group, ids ->
+            val chip = ids.firstOrNull()?.let { group.findViewById<Chip>(it) } ?: return@setOnCheckedStateChangeListener
+            categoryFilter = chip.tag as String
+            prefs.edit().putString("filter", categoryFilter).apply()
+            rebuildLooksRows()
+            looksList.scrollToPosition(0)
+            regenerateThumbnails()
+        }
+    }
 
-        val sortedGroups = grouped.entries.sortedBy { LookCategories.groupOrder(it.key) }
-        for ((group, items) in sortedGroups) {
-            if (group != "Original") {
-                rows.add(LooksRow.Header(group))
+    // "No look" always comes first so the input-only result is one tap away in every view.
+    private fun rebuildLooksRows() {
+        fun row(i: Int) = LooksRow.Look(i, looks[i].name, looks[i].favKey)
+        val rows = ArrayList<LooksRow>()
+        rows.add(row(0))
+        val shown = (1 until looks.size).filter { i ->
+            when (categoryFilter) {
+                FILTER_ALL -> true
+                FILTER_FAVS -> looks[i].favKey?.let { it in favourites } == true
+                else -> looks[i].category == categoryFilter
             }
-            for ((index, look) in items) {
-                rows.add(LooksRow.Look(index, look.name))
-            }
+        }
+        if (categoryFilter == FILTER_FAVS && shown.isEmpty()) rows.add(LooksRow.Header(getString(R.string.no_favourites)))
+        if (categoryFilter == FILTER_ALL || categoryFilter == FILTER_FAVS) {
+            shown.groupBy { looks[it].category }
+                .toSortedMap(compareBy<String>({ LookCategories.sortKey(it) }, { it }))
+                .forEach { (category, indices) ->
+                    rows.add(LooksRow.Header(category))
+                    indices.forEach { rows.add(row(it)) }
+                }
+        } else {
+            shown.forEach { rows.add(row(it)) }
         }
         looksAdapter.rows = rows
     }
+
+    // ---- Thumbnails --------------------------------------------------------------------------
+
+    private fun scheduleThumbCapture() {
+        if (videoUri == null || comparing) return
+        main.removeCallbacks(captureThumb)
+        main.postDelayed(captureThumb, 500)
+    }
+
+    private fun captureThumbnailFrame(positionMs: Long) {
+        val uri = videoUri ?: return
+        thumbIo.execute {
+            val frame = try {
+                val r = MediaMetadataRetriever()
+                try {
+                    r.setDataSource(this, uri)
+                    r.getFrameAtTime(positionMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST)
+                } finally {
+                    r.release()
+                }
+            } catch (e: Exception) {
+                null
+            } ?: return@execute
+            val thumb = shrink(frame, THUMB_LONG_SIDE)
+            main.post {
+                if (uri != videoUri) return@post
+                thumbFrame = thumb
+                thumbFrameMs = positionMs
+                regenerateThumbnails()
+            }
+        }
+    }
+
+    // Grades the thumbnail frame with every look, visible ones first. A newer run cancels an older one.
+    private fun regenerateThumbnails() {
+        val base = thumbFrame ?: return
+        val gen = ++thumbGeneration
+        val input = inputs[selectedInput]
+        val visible = looksAdapter.visibleLookIndices()
+        val visibleSet = visible.toHashSet()
+        val order = (visible + looks.indices.filter { it !in visibleSet }).map { it to looks[it] }
+        val w = base.width
+        val h = base.height
+        thumbIo.execute {
+            val src = IntArray(w * h)
+            base.getPixels(src, 0, w, 0, 0, w, h)
+            val first = try {
+                inputCube(input)
+            } catch (e: Exception) {
+                null
+            }
+            for ((index, look) in order) {
+                if (gen != thumbGeneration) return@execute
+                if (look is LookItem.Diag) continue
+                try {
+                    val second = when (look) {
+                        is LookItem.Asset -> loadAsset(look.path)
+                        is LookItem.External -> look.cube
+                        else -> null
+                    }
+                    val stageOne = if (look is LookItem.External && look.full) null else first
+                    val px = src.copyOf()
+                    if (stageOne != null || second != null) LutMath.applyToPixels(LutMath.compose(stageOne, second, 17), px)
+                    val bmp = Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
+                    main.post { if (gen == thumbGeneration) looksAdapter.setThumbnail(index, bmp) }
+                } catch (e: Exception) {
+                    // A look that fails to load just keeps a blank tile.
+                }
+            }
+        }
+    }
+
+    private fun inputCube(input: InputEntry): FloatCube? = when {
+        input.isRaw || input.isPassthrough -> null
+        input.isLoaded -> input.cube
+        else -> loadAsset(input.path!!)
+    }
+
+    // ---- LUT resolution and preview -----------------------------------------------------------
 
     private fun loadAsset(path: String): FloatCube =
         synchronized(floatCache) { floatCache[path] }
@@ -431,6 +704,7 @@ class MainActivity : AppCompatActivity() {
                 synchronized(floatCache) { floatCache[path] = it }
             }
 
+    // Builds (and caches) one 33-point LUT for the current input + look pair. Null means no effect.
     private fun resolve(onReady: (cube: Array<Array<IntArray>>?, floatCube: FloatCube?, label: String, fileLabel: String) -> Unit) {
         val input = inputs[selectedInput]
         val look = looks[selectedLook]
@@ -487,6 +761,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Choosing an input or a look applies it to the playing or paused video straight away.
     private fun applySelection() {
         val look = looks[selectedLook]
         if (look is LookItem.Diag) {
@@ -494,7 +769,7 @@ class MainActivity : AppCompatActivity() {
             currentCube = null
             diagMode = look.kind
             applyEffects(diagEffects(look.kind))
-            setStatus("${look.name}: bypasses the input and every LUT.")
+            setStatus("${look.name}: bypasses the input and every LUT. The picture should change drastically.")
             return
         }
         diagMode = 0
@@ -505,6 +780,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // DIAG 1 rotates the colour channels with an RgbMatrix (red<-green, green<-blue, blue<-red), no LUT involved.
     private fun diagEffects(kind: Int): List<Effect> = when (kind) {
         1 -> listOf<Effect>(object : RgbMatrix {
             override fun getMatrix(presentationTimeUs: Long, useHdr: Boolean): FloatArray = floatArrayOf(
@@ -536,16 +812,17 @@ class MainActivity : AppCompatActivity() {
         val input = inputs[selectedInput]
         val look = looks[selectedLook]
         if (noEffect()) {
-            return if (input.isRaw) "Raw footage, no transform" else "No effect (Rec.709 passthrough)"
+            return if (input.isRaw) "Raw footage, no transform" else "No effect (Rec.709 passthrough, no look)"
         }
         val inputText = when {
             look is LookItem.External && look.full -> "skipped (full LUT)"
             input.isSlog3 -> "${input.name} (expects S-Log3 footage)"
             else -> input.name
         }
-        return "Input: $inputText + Look: ${look.name}"
+        return "Camera: $inputText + Look: ${look.name}"
     }
 
+    // An identity LUT stands in for "no effect" so the effects pipeline stays set up on the player.
     private fun effectList(cube: Array<Array<IntArray>>?): List<Effect> =
         listOf(SingleColorLut.createFromCube(cube ?: identityCube))
 
@@ -555,35 +832,29 @@ class MainActivity : AppCompatActivity() {
             updateDebug()
             return
         }
-        val position = player.currentPosition
-        val playing = player.playWhenReady
-        player.setVideoEffects(effects)
-        effectsApplied++
-        if (player.mediaItemCount > 0 && player.playbackState != Player.STATE_IDLE) {
-            if (!playing || abs(player.currentPosition - position) > 300) player.seekTo(position)
-        }
-        player.playWhenReady = playing
-        updateDebug()
+        swapEffects(effects)
     }
 
     private fun updateDebug() {
         val f = player.videoFormat
-        val src = if (f != null) "${f.width}x${f.height} | ${f.sampleMimeType}" else "no video"
+        val src = if (f != null) "${f.width}x${f.height} | ${f.sampleMimeType}" else "no video yet"
         val mode = when {
             effectsDisabled -> "OFF after error"
             diagMode != 0 -> "DIAG $diagMode"
             currentCube == null -> "identity"
             else -> "LUT"
         }
-        debug.text = "effects: $effectsApplied ($mode) | $src | frame: ${if (firstFrame) "yes" else "no"} | errors: $errorCount"
+        debug.text = "effects: $effectsApplied sets ($mode) | $src | firstFrame: ${if (firstFrame) "yes" else "no"} | errors: $errorCount"
     }
+
+    // ---- Loading LUT files -------------------------------------------------------------------
 
     private fun loadInputLut(uri: Uri) {
         setStatus("Reading input LUT...")
         io.execute {
             try {
                 val text = contentResolver.openInputStream(uri)!!.bufferedReader().use { it.readText() }
-                val cube = CubeParser.parseFloat(text)
+                val cube = CubeParser.parseFloat(text) // rejects 1D-only and unsupported files before anything is stored
                 val dir = File(filesDir, "inputs").apply { mkdirs() }
                 val file = File(dir, LutNames.slug(displayName(uri).removeSuffix(".cube").removeSuffix(".CUBE")) + ".cube")
                 file.writeText(text)
@@ -599,10 +870,9 @@ class MainActivity : AppCompatActivity() {
                         inputs.add(at, entry)
                         selectedInput = at
                     }
-                    val adapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, inputs.map { it.name })
-                    inputDropdown.setAdapter(adapter)
+                    profileDetected = false
                     prefs.edit().putString("input", entry.key).apply()
-                    inputDropdown.setText(inputs[selectedInput].name, false)
+                    updateProfileButton()
                     onInputChanged()
                 }
             } catch (e: Exception) {
@@ -620,19 +890,23 @@ class MainActivity : AppCompatActivity() {
                 val cube = CubeParser.parseFloat(text)
                 val name = LutNames.pretty(displayName(uri)) + if (full) " (full)" else ""
                 main.post {
+                    // Loaded looks go before the DIAG items, which stay at the end of the list.
                     val at = looks.indexOfFirst { it is LookItem.Diag }.let { if (it < 0) looks.size else it }
                     looks.add(at, LookItem.External(name, cube, full, ++externalCount))
-                    selectedLook = at
-                    looksAdapter.selectedIndex = selectedLook
+                    if (selectedLook >= at) selectedLook++
+                    categoryFilter = LookCategories.MY_LUTS
+                    rebuildChips()
                     rebuildLooksRows()
-                    updateExportEnabled()
-                    applySelection()
+                    selectLook(at)
+                    regenerateThumbnails()
                 }
             } catch (e: Exception) {
                 main.post { setStatus("LUT error: ${e.message}") }
             }
         }
     }
+
+    // ---- Export ------------------------------------------------------------------------------
 
     private fun startExport() {
         val uri = videoUri ?: return
@@ -652,6 +926,7 @@ class MainActivity : AppCompatActivity() {
         val edited = EditedMediaItem.Builder(MediaItem.fromUri(uri))
             .setEffects(Effects(emptyList(), listOf<Effect>(SingleColorLut.createFromCube(cube))))
             .build()
+        // Ignore HDR colour flags so the LUT acts on the raw code values, matching the preview.
         val composition = Composition.Builder(EditedMediaItemSequence.Builder(edited).build())
             .setHdrMode(Composition.HDR_MODE_EXPERIMENTAL_FORCE_INTERPRET_HDR_AS_SDR)
             .build()
@@ -671,7 +946,7 @@ class MainActivity : AppCompatActivity() {
                     transformer = null
                     progress.visibility = View.GONE
                     updateExportEnabled()
-                    setStatus("Export failed: ${exportException.message}")
+                    setStatus("Export failed: ${exportException.message} (${exportException.errorCodeName})")
                 }
             })
             .build()
@@ -708,7 +983,7 @@ class MainActivity : AppCompatActivity() {
                     progress.visibility = View.GONE
                     updateExportEnabled()
                     setStatus(verdict)
-                    Snackbar.make(looksList, "Saved: $where", Snackbar.LENGTH_LONG).show()
+                    Snackbar.make(snackbarAnchor(), "Saved: $where", Snackbar.LENGTH_LONG).show()
                 }
             } catch (e: Exception) {
                 main.post {
@@ -722,6 +997,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Compares one frame of the exported file with the same frame of the source, with the LUT applied to the
+    // source on the CPU. Small frames keep encoder noise and resampling from drowning the comparison.
     private fun verifyExport(source: Uri, output: File, lut: FloatCube): String {
         val durationMs = MediaMetadataRetriever().let { r ->
             try {
@@ -737,7 +1014,7 @@ class MainActivity : AppCompatActivity() {
         val aspectSrc = src.width.toFloat() / src.height
         val aspectOut = out.width.toFloat() / out.height
         if (abs(aspectSrc - aspectOut) / aspectSrc > 0.1f) {
-            return "Export check inconclusive: frame size mismatch (${out.width}x${out.height} vs ${src.width}x${src.height})"
+            return "Export check inconclusive: the exported frame is ${out.width}x${out.height} but the source is ${src.width}x${src.height}"
         }
         val outScaled = Bitmap.createScaledBitmap(shrink(out, CHECK_LONG_SIDE * 2), src.width, src.height, true)
         val a = IntArray(src.width * src.height)
@@ -758,6 +1035,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Halves repeatedly (a cheap box-style filter) until the long side is at most longSide.
     private fun shrink(bitmap: Bitmap, longSide: Int): Bitmap {
         var b = bitmap
         while (maxOf(b.width, b.height) / 2 >= longSide) {
@@ -796,6 +1074,7 @@ class MainActivity : AppCompatActivity() {
             contentResolver.openOutputStream(target)!!.use { o -> file.inputStream().use { it.copyTo(o) } }
             return "Movies/LUT/$name"
         }
+        // API 26-28 would need WRITE_EXTERNAL_STORAGE; use app-specific storage instead.
         val dir = File(getExternalFilesDir(Environment.DIRECTORY_MOVIES), "LUT").apply { mkdirs() }
         val dest = File(dir, name)
         file.copyTo(dest, overwrite = true)
@@ -810,62 +1089,18 @@ class MainActivity : AppCompatActivity() {
         status.text = s
     }
 
+    private fun snackbarAnchor(): View = findViewById(android.R.id.content)
+
     private fun displayName(uri: Uri): String =
         contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
             if (it.moveToFirst()) it.getString(0) else null
         } ?: uri.lastPathSegment ?: "file"
 
-    private fun captureThumbnailFrame() {
-        val uri = videoUri ?: return
-        io.execute {
-            try {
-                val retriever = MediaMetadataRetriever()
-                retriever.setDataSource(this, uri)
-                val frame = retriever.getFrameAtTime(500_000L, MediaMetadataRetriever.OPTION_CLOSEST)
-                retriever.release()
-                if (frame != null) {
-                    val thumb = shrink(frame, 96)
-                    main.post {
-                        thumbnailFrame = thumb
-                        regenerateThumbnails()
-                    }
-                }
-            } catch (_: Exception) {}
-        }
-    }
-
-    private fun regenerateThumbnails() {
-        val base = thumbnailFrame ?: return
-        io.execute {
-            for ((index, look) in looks.withIndex()) {
-                if (look is LookItem.Original || look is LookItem.Diag) continue
-                try {
-                    val input = inputs[selectedInput]
-                    val skipInput = look is LookItem.External && look.full
-                    val first = when {
-                        skipInput || input.isRaw || input.isPassthrough -> null
-                        input.isLoaded -> input.cube
-                        input.path != null -> loadAsset(input.path)
-                        else -> null
-                    }
-                    val second = when (look) {
-                        is LookItem.Asset -> loadAsset(look.path)
-                        is LookItem.External -> look.cube
-                        else -> null
-                    }
-                    val composed = LutMath.compose(first, second, 17)
-                    val copy = base.copy(Bitmap.Config.ARGB_8888, true)
-                    val pixels = IntArray(copy.width * copy.height)
-                    copy.getPixels(pixels, 0, copy.width, 0, 0, copy.width, copy.height)
-                    LutMath.applyToPixels(composed, pixels)
-                    copy.setPixels(pixels, 0, copy.width, 0, 0, copy.width, copy.height)
-                    main.post { looksAdapter.updateThumbnail(index, copy) }
-                } catch (_: Exception) {}
-            }
-        }
-    }
-
     private companion object {
         const val CHECK_LONG_SIDE = 160
+        const val THUMB_LONG_SIDE = 240
+        const val SCAN_BYTES = 2 * 1024 * 1024
+        const val FILTER_ALL = "\u0000all"
+        const val FILTER_FAVS = "\u0000favourites"
     }
 }

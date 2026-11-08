@@ -1,16 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">LUT Master</string>
-    <string name="pick_video">Open Video</string>
+    <string name="pick_video">Open video</string>
     <string name="export">Export</string>
-    <string name="load_look_cube">Load Look .cube</string>
-    <string name="load_input_cube">Load Input .cube</string>
-    <string name="input_profile">Input Profile</string>
-    <string name="full_lut_skip_input">Full LUT (skip input)</string>
-    <string name="hold_to_compare">Hold for original</string>
-    <string name="diagnostics">Diagnostics</string>
+    <string name="load_look_cube">Load look .cube</string>
+    <string name="load_input_cube">Load .cube</string>
+    <string name="camera_label">Camera</string>
+    <string name="camera_profile">Camera profile</string>
+    <string name="full_lut_skip_input">Full LUT (skip camera profile)</string>
     <string name="keep_colour_tags">Keep file colour tags</string>
-    <string name="show_diag_items">Show DIAG test items</string>
-    <string name="advanced_settings">Advanced</string>
+    <string name="show_diag_items">Diagnostics</string>
+    <string name="how_it_works">How it works</string>
     <string name="remove">Remove</string>
+    <string name="change">Change</string>
+    <string name="favourite">Favourite</string>
+    <string name="original_badge">ORIGINAL</string>
+    <string name="placeholder">Tap Open video to start</string>
+    <string name="chip_all">All</string>
+    <string name="chip_favourites">★ Favourites</string>
+    <string name="no_favourites">Tap the star on a look to add it here</string>
+    <string name="detected_suffix">(detected)</string>
+    <string name="not_detected">Couldn\'t detect the camera profile, so it\'s using %1$s.</string>
+    <string name="help_text">Log footage looks flat and grey on purpose. The camera keeps as much detail as it can in the shadows and highlights, and leaves contrast and colour for later.\n\nRec.709 is the standard for normal HD video. It\'s what phones, TVs and YouTube expect, so log footage needs converting to it before it looks right.\n\nLUT Master does this in two steps.\n\n1. Camera profile. This converts the footage from your camera\'s log format to Rec.709. It has to match how the clip was shot, such as Samsung Log or Sony S-Log3. The app tries to detect it from the file.\n\n2. Look. This is the creative grade on top, like a film style or a cinematic teal and orange.\n\nIf a clip already looks normal, it isn\'t log. Set the camera profile to Rec709 Passthrough.\n\nPress and hold the video to see the original clip. Export saves a graded copy to Movies/LUT and leaves the original alone.</string>
 </resources>

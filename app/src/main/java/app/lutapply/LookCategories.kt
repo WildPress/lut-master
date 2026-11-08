@@ -1,28 +1,31 @@
 package app.lutapply
 
 object LookCategories {
-    data class Category(val title: String, val prefixes: List<String>)
+    const val MY_LUTS = "My LUTs"
+    const val DIAGNOSTICS = "Diagnostics"
 
-    private val categories = listOf(
-        Category("Film", listOf("kodak-", "fuji-", "cinestill-")),
-        Category("Tinted Blacks", listOf("blacks-")),
-        Category("Foggy Forest", listOf("golden-fog", "bamboo-haze", "neon-forest", "jade-dream", "misty-emerald", "pastel-mist")),
+    // Looks that sit directly in luts/looks (not in a category folder) are placed by file name.
+    private val byPrefix = listOf(
+        "Film" to listOf("kodak-", "fuji-", "cinestill-"),
+        "Tinted Blacks" to listOf("blacks-"),
+        "Foggy Forest" to listOf("golden-fog", "bamboo-haze", "neon-forest", "jade-dream", "misty-emerald", "pastel-mist"),
     )
 
-    fun categorise(path: String): String {
-        val file = path.substringAfterLast('/')
-        for (cat in categories) {
-            if (cat.prefixes.any { file.startsWith(it, ignoreCase = true) }) return cat.title
-        }
-        return "Other"
-    }
+    private val order = listOf(
+        "Cinematic", "Film", "Vivid", "Beauty", "Moody", "Gritty", "Horror", "Cyberpunk", "Quirky",
+        "Vintage", "Black & White", "Tinted Blacks", "Foggy Forest",
+    )
 
-    fun groupOrder(title: String): Int = when (title) {
-        "Film" -> 0
-        "Tinted Blacks" -> 1
-        "Foggy Forest" -> 2
-        "External" -> 3
-        "Diagnostics" -> 4
-        else -> 3
+    fun categorise(fileName: String): String =
+        byPrefix.firstOrNull { (_, prefixes) -> prefixes.any { fileName.startsWith(it, ignoreCase = true) } }?.first
+            ?: "Other"
+
+    fun folderTitle(folder: String): String =
+        LutNames.pretty(folder.replace("-and-", "-&-"))
+
+    fun sortKey(title: String): Int = when (title) {
+        MY_LUTS -> 900
+        DIAGNOSTICS -> 999
+        else -> order.indexOf(title).let { if (it < 0) 500 else it }
     }
 }

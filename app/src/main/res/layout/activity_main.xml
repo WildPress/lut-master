@@ -1,24 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="?android:colorBackground"
     android:fitsSystemWindows="true"
     android:orientation="vertical">
 
-    <!-- Toolbar -->
     <com.google.android.material.appbar.MaterialToolbar
         android:id="@+id/toolbar"
         android:layout_width="match_parent"
         android:layout_height="?attr/actionBarSize"
         android:background="@color/surface_container"
+        app:menu="@menu/overflow"
         app:title="@string/app_name"
-        app:titleTextColor="?colorOnSurface"
-        app:menu="@menu/overflow" />
+        app:titleTextColor="?colorOnSurface" />
 
-    <!-- Video player -->
-    <FrameLayout
+    <app.lutapply.HoldToCompareLayout
         android:id="@+id/playerHolder"
         android:layout_width="match_parent"
         android:layout_height="0dp"
@@ -30,18 +29,17 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             app:resize_mode="fit"
+            app:show_buffering="when_playing"
+            app:show_fastforward_button="false"
+            app:show_next_button="false"
+            app:show_previous_button="false"
+            app:show_rewind_button="false"
+            app:show_shuffle_button="false"
+            app:show_subtitle_button="false"
+            app:show_timeout="3000"
             app:surface_type="texture_view"
-            app:use_controller="false" />
+            app:use_controller="true" />
 
-        <View
-            android:id="@+id/tapLayer"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:clickable="true"
-            android:contentDescription="Tap to play or pause"
-            android:focusable="true" />
-
-        <!-- Compare badge shown during long-press -->
         <TextView
             android:id="@+id/compareBadge"
             android:layout_width="wrap_content"
@@ -51,72 +49,69 @@
             android:background="@drawable/badge_bg"
             android:paddingHorizontal="12dp"
             android:paddingVertical="4dp"
-            android:text="ORIGINAL"
+            android:text="@string/original_badge"
             android:textColor="#FFFFFFFF"
             android:textSize="12sp"
             android:textStyle="bold"
             android:visibility="gone" />
 
-        <!-- No-video placeholder -->
         <TextView
             android:id="@+id/placeholder"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="center"
-            android:text="@string/pick_video"
+            android:gravity="center"
+            android:padding="24dp"
+            android:text="@string/placeholder"
             android:textColor="?colorOnSurfaceVariant"
-            android:textSize="16sp" />
-    </FrameLayout>
+            android:textSize="15sp" />
+    </app.lutapply.HoldToCompareLayout>
 
-    <!-- Transport controls -->
-    <androidx.media3.ui.PlayerControlView
-        android:id="@+id/controls"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:background="@color/surface_container"
-        app:show_fastforward_button="false"
-        app:show_next_button="false"
-        app:show_previous_button="false"
-        app:show_rewind_button="false"
-        app:show_timeout="0" />
-
-    <!-- Input profile row -->
     <LinearLayout
+        android:id="@+id/profileRow"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="@color/surface_container"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingHorizontal="16dp"
-        android:paddingVertical="4dp">
+        android:paddingHorizontal="16dp">
 
-        <com.google.android.material.textfield.TextInputLayout
-            android:id="@+id/inputLayout"
-            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/camera_label"
+            android:textColor="?colorOnSurfaceVariant"
+            android:textSize="13sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/profileButton"
+            style="@style/Widget.Material3.Button.TextButton"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:hint="@string/input_profile">
-
-            <AutoCompleteTextView
-                android:id="@+id/inputDropdown"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:inputType="none"
-                android:textColor="?colorOnSurface"
-                android:textSize="14sp" />
-        </com.google.android.material.textfield.TextInputLayout>
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/removeInput"
-            style="@style/Widget.Material3.Button.TextButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/remove"
-            android:visibility="gone" />
+            android:ellipsize="end"
+            android:gravity="start|center_vertical"
+            android:maxLines="1"
+            app:icon="@drawable/ic_arrow_drop_down"
+            app:iconGravity="end" />
     </LinearLayout>
 
-    <!-- Looks list (grouped RecyclerView) -->
+    <HorizontalScrollView
+        android:id="@+id/chipScroll"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:scrollbars="none">
+
+        <com.google.android.material.chip.ChipGroup
+            android:id="@+id/categoryChips"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingHorizontal="12dp"
+            app:selectionRequired="true"
+            app:singleLine="true"
+            app:singleSelection="true" />
+    </HorizontalScrollView>
+
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/looksList"
         android:layout_width="match_parent"
@@ -124,10 +119,8 @@
         android:layout_weight="2"
         android:clipToPadding="false"
         android:paddingHorizontal="8dp"
-        android:paddingTop="8dp"
         android:paddingBottom="8dp" />
 
-    <!-- Status bar -->
     <TextView
         android:id="@+id/status"
         android:layout_width="match_parent"
@@ -135,23 +128,20 @@
         android:background="@color/surface_container"
         android:paddingHorizontal="16dp"
         android:paddingVertical="6dp"
-        android:text="Pick a video, choose the input profile, then tap a look."
         android:textColor="?colorOnSurfaceVariant"
         android:textSize="13sp" />
 
-    <!-- Debug info (hidden by default, shown from overflow) -->
     <TextView
         android:id="@+id/debug"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="@color/surface_container"
-        android:paddingBottom="4dp"
         android:paddingHorizontal="16dp"
+        android:paddingBottom="4dp"
         android:textColor="@color/on_surface_dim"
         android:textSize="11sp"
         android:visibility="gone" />
 
-    <!-- Export progress -->
     <com.google.android.material.progressindicator.LinearProgressIndicator
         android:id="@+id/progress"
         android:layout_width="match_parent"
@@ -160,8 +150,8 @@
         android:visibility="gone"
         app:trackCornerRadius="0dp" />
 
-    <!-- Bottom action bar -->
     <LinearLayout
+        android:id="@+id/bottomBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="@color/surface_container"
@@ -176,9 +166,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="@string/pick_video"
-            app:icon="@android:drawable/ic_media_play"
-            app:iconGravity="textStart" />
+            android:text="@string/pick_video" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/export"

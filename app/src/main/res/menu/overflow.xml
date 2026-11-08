@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <menu xmlns:android="http://schemas.android.com/apk/res/android">
     <item
+        android:id="@+id/menu_help"
+        android:title="@string/how_it_works" />
+    <item
         android:id="@+id/menu_load_look"
         android:title="@string/load_look_cube" />
-    <item
-        android:id="@+id/menu_load_input"
-        android:title="@string/load_input_cube" />
     <item
         android:id="@+id/menu_full_lut"
         android:checkable="true"
