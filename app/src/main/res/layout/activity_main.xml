@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#111111"
+    android:fitsSystemWindows="true"
+    android:orientation="vertical"
+    android:padding="8dp">
+
+    <FrameLayout
+        android:id="@+id/playerHolder"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="3">
+
+        <androidx.media3.ui.PlayerView
+            android:id="@+id/player"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            app:resize_mode="fit"
+            app:surface_type="texture_view"
+            app:use_controller="false" />
+
+        <View
+            android:id="@+id/tapLayer"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clickable="true"
+            android:contentDescription="Tap to play or pause"
+            android:focusable="true" />
+    </FrameLayout>
+
+    <androidx.media3.ui.PlayerControlView
+        android:id="@+id/controls"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        app:show_fastforward_button="false"
+        app:show_next_button="false"
+        app:show_previous_button="false"
+        app:show_rewind_button="false"
+        app:show_timeout="0" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <Spinner
+            android:id="@+id/inputSpinner"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:minHeight="44dp"
+            android:popupBackground="#222222" />
+
+        <Button
+            android:id="@+id/removeInput"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Remove"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/pickInputLut"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Load input .cube..." />
+    </LinearLayout>
+
+    <ListView
+        android:id="@+id/lutList"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="2"
+        android:choiceMode="singleChoice"
+        android:divider="#222222"
+        android:dividerHeight="1dp" />
+
+    <TextView
+        android:id="@+id/status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
+        android:text="Pick a video, choose the input profile, then tap a look."
+        android:textColor="#DDDDDD"
+        android:textSize="13sp" />
+
+    <TextView
+        android:id="@+id/debug"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingBottom="4dp"
+        android:textColor="#8899AA"
+        android:textSize="11sp" />
+
+    <CheckBox
+        android:id="@+id/fullLut"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Full LUT (skip input transform)"
+        android:textColor="#DDDDDD" />
+
+    <ProgressBar
+        android:id="@+id/progress"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:max="100"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/pickVideo"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Video" />
+
+        <Button
+            android:id="@+id/pickLut"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1.3"
+            android:text="Load .cube..." />
+
+        <Button
+            android:id="@+id/export"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:enabled="false"
+            android:text="Export" />
+
+        <Button
+            android:id="@+id/advancedButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="More" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/advancedPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Changing one restarts the screen, so pick the video again."
+            android:textColor="#8899AA"
+            android:textSize="11sp" />
+
+        <CheckBox
+            android:id="@+id/advKeepColour"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Keep file colour tags (may error on HDR)"
+            android:textColor="#DDDDDD" />
+
+        <CheckBox
+            android:id="@+id/advDiag"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Show DIAG test items at the end of the list"
+            android:textColor="#DDDDDD" />
+    </LinearLayout>
+</LinearLayout>
