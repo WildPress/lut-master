@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="surface_container">#FF1D2024</color>
-    <color name="surface_container_high">#FF282A2F</color>
-    <color name="surface_container_highest">#FF33353A</color>
+    <!-- Cat Daddy brand colours, shared by every app (see cat-daddy-brand/README.md). -->
+    <color name="cd_ink">#FF15131C</color>
+    <color name="cd_cream">#FFF4EADB</color>
+    <color name="cd_ginger">#FFFF8A34</color>
+    <color name="cd_teal">#FF5ED5D8</color>
+
+    <color name="surface_container">#FF1E1C26</color>
+    <color name="surface_container_high">#FF282530</color>
+    <color name="surface_container_highest">#FF33303B</color>
     <color name="on_surface_dim">#FF8E9099</color>
     <color name="export_green">#FF81C784</color>
     <color name="export_green_dark">#FF2E7D32</color>

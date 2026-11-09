@@ -6,6 +6,7 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
@@ -16,6 +17,7 @@ import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -175,6 +177,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Hold the Cat Daddy splash long enough to read on a fresh start. Not on recreate(), which
+        // the menu toggles use, or the screen would freeze for a moment each time.
+        val splash = installSplashScreen()
+        if (savedInstanceState == null) {
+            val splashUntil = SystemClock.uptimeMillis() + SPLASH_MIN_MS
+            splash.setKeepOnScreenCondition { SystemClock.uptimeMillis() < splashUntil }
+        }
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
@@ -1151,6 +1160,7 @@ class MainActivity : AppCompatActivity() {
 
     private companion object {
         const val CHECK_LONG_SIDE = 160
+        const val SPLASH_MIN_MS = 700L
         const val THUMB_LONG_SIDE = 240
         const val SCAN_BYTES = 2 * 1024 * 1024
         const val FILTER_ALL = "\u0000all"
