@@ -7,6 +7,9 @@
         android:title="@string/pick_video"
         app:showAsAction="always" />
     <item
+        android:id="@+id/menu_profile"
+        android:title="@string/camera_profile" />
+    <item
         android:id="@+id/menu_help"
         android:title="@string/how_it_works" />
     <item

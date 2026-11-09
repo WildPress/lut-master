@@ -89,4 +89,13 @@ object LutMath {
         }
         return FloatCube(n, data)
     }
+
+    // Blends two cubes of the same size: t = 0 gives a, t = 1 gives b. Used for look strength,
+    // where a is the camera profile alone and b is the profile plus the full look.
+    fun mix(a: FloatCube, b: FloatCube, t: Float): FloatCube {
+        require(a.size == b.size) { "Cubes must be the same size" }
+        val out = FloatArray(a.data.size)
+        for (i in out.indices) out[i] = a.data[i] + (b.data[i] - a.data[i]) * t
+        return FloatCube(a.size, out)
+    }
 }

@@ -51,6 +51,7 @@ import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.progressindicator.LinearProgressIndicator
+import com.google.android.material.slider.Slider
 import com.google.android.material.snackbar.Snackbar
 import java.io.File
 import java.io.InputStream
@@ -105,6 +106,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var looksList: RecyclerView
     private lateinit var looksAdapter: LooksAdapter
     private lateinit var placeholder: View
+    private lateinit var strengthSlider: Slider
+    private lateinit var strengthValue: TextView
     private lateinit var compareBadge: TextView
     private lateinit var backCallback: OnBackPressedCallback
     private var loadedInputCount = 0
@@ -152,6 +155,7 @@ class MainActivity : AppCompatActivity() {
     private var fullLut = false
     private var comparing = false
     private var fullscreen = false
+    private var profileUndetected = false
     private var profileDetected = false
     private var categoryFilter = FILTER_ALL
     private val favourites = HashSet<String>()
@@ -194,6 +198,8 @@ class MainActivity : AppCompatActivity() {
         chips = findViewById(R.id.categoryChips)
         looksList = findViewById(R.id.looksList)
         placeholder = findViewById(R.id.placeholder)
+        strengthSlider = findViewById(R.id.strength)
+        strengthValue = findViewById(R.id.strengthValue)
         compareBadge = findViewById(R.id.compareBadge)
         playerView = findViewById(R.id.player)
 
@@ -280,6 +286,13 @@ class MainActivity : AppCompatActivity() {
         updateDebug()
 
         placeholder.setOnClickListener { pickVideo.launch(arrayOf("video/*")) }
+        strengthSlider.addOnChangeListener { _, value, fromUser ->
+            if (!fromUser) return@addOnChangeListener
+            strengths[selectedLook] = value / 100f
+            strengthValue.text = "${value.roundToInt()}%"
+            applySelection()
+        }
+        updateStrengthRow()
         exportButton.setOnClickListener { startExport() }
         if (inputs.size == 1 && looks.size == 1) setStatus("No bundled LUTs found. Use the menu to load one.")
     }
@@ -300,6 +313,7 @@ class MainActivity : AppCompatActivity() {
                     pickVideo.launch(arrayOf("video/*"))
                     true
                 }
+                R.id.menu_profile -> { showProfilePicker(); true }
                 R.id.menu_help -> {
                     MaterialAlertDialogBuilder(this)
                         .setTitle(R.string.how_it_works)
@@ -349,6 +363,7 @@ class MainActivity : AppCompatActivity() {
         thumbGeneration++
         looksAdapter.clearThumbnails()
         captureThumbnailFrame(500L)
+        profileUndetected = false
         detectProfile(uri)
         updateExportEnabled()
         applySelection()
@@ -359,10 +374,10 @@ class MainActivity : AppCompatActivity() {
         if (fullscreen == on) return
         fullscreen = on
         val vis = if (on) View.GONE else View.VISIBLE
-        for (id in intArrayOf(R.id.toolbar, R.id.profileRow, R.id.chipScroll, R.id.looksList)) {
+        for (id in intArrayOf(R.id.toolbar, R.id.strengthRow, R.id.chipScroll, R.id.looksList)) {
             findViewById<View>(id).visibility = vis
         }
-        status.visibility = if (!on && statusShown) View.VISIBLE else View.GONE
+        updateProfileRow()
         if (advDiag) debug.visibility = vis
         playerView.setFullscreenButtonState(on)
         backCallback.isEnabled = on
@@ -443,6 +458,14 @@ class MainActivity : AppCompatActivity() {
     private fun updateProfileButton() {
         val name = inputs[selectedInput].name
         profileButton.text = if (profileDetected) "$name ${getString(R.string.detected_suffix)}" else name
+        updateProfileRow()
+    }
+
+    // The camera profile rarely changes, so its row only shows when detection failed for the current
+    // video. Otherwise it lives in the overflow menu.
+    private fun updateProfileRow() {
+        val show = !fullscreen && videoUri != null && profileUndetected
+        findViewById<View>(R.id.profileRow).visibility = if (show) View.VISIBLE else View.GONE
     }
 
     private fun selectInput(index: Int, detected: Boolean = false) {
@@ -483,9 +506,11 @@ class MainActivity : AppCompatActivity() {
                 if (uri != videoUri) return@post
                 val index = fragment?.let { f -> inputs.indexOfFirst { it.path?.contains(f, ignoreCase = true) == true } } ?: -1
                 if (index >= 0) {
+                    profileUndetected = false
                     selectInput(index, detected = true)
                 } else {
                     profileDetected = false
+                    profileUndetected = true
                     updateProfileButton()
                     Snackbar.make(snackbarAnchor(), getString(R.string.not_detected, inputs[selectedInput].name), Snackbar.LENGTH_LONG)
                         .setAction(R.string.change) { showProfilePicker() }
@@ -590,6 +615,7 @@ class MainActivity : AppCompatActivity() {
     private fun selectLook(index: Int) {
         if (comparing) endCompare()
         selectedLook = index
+        updateStrengthRow()
         looksAdapter.selectedIndex = index
         updateExportEnabled()
         applySelection()
@@ -761,20 +787,39 @@ class MainActivity : AppCompatActivity() {
             is LookItem.External -> "external-${look.id}"
             is LookItem.Diag -> "diag-${look.kind}"
         }
+        val strength = if (look is LookItem.Original) 1f else lookStrength()
         val parts = ArrayList<String>()
         if (!skipInput) parts.add(input.name)
-        if (look !is LookItem.Original) parts.add(look.name)
+        if (look !is LookItem.Original) parts.add(if (strength < 1f) "${look.name} ${(strength * 100).roundToInt()}%" else look.name)
         if (parts.isEmpty()) parts.add("Raw")
         val label = parts.joinToString(" + ")
         val fileLabel = parts.joinToString("_") { LutNames.slug(it) }
         val key = "${inputKey ?: "raw"}|$lookKey"
+        val baseKey = "${inputKey ?: "raw"}|original"
         val request = ++requestId
 
         if (inputKey == null && look is LookItem.Original) {
             onReady(null, null, label, fileLabel)
             return
         }
-        composedCache[key]?.let { onReady(it, composedFloatCache[key], label, fileLabel); return }
+
+        // Strength blends the profile on its own (base) with the profile plus the full look.
+        fun deliver(full: FloatCube, base: FloatCube) {
+            if (strength >= 0.999f) {
+                val packed = composedCache.getOrPut(key) { CubeParser.pack(full) }
+                onReady(packed, full, label, fileLabel)
+            } else {
+                val mixed = LutMath.mix(base, full, strength)
+                onReady(CubeParser.pack(mixed), mixed, label, fileLabel)
+            }
+        }
+
+        val cachedFull = composedFloatCache[key]
+        val cachedBase = composedFloatCache[baseKey]
+        if (cachedFull != null && cachedBase != null) {
+            deliver(cachedFull, cachedBase)
+            return
+        }
         io.execute {
             try {
                 val first = when {
@@ -788,17 +833,31 @@ class MainActivity : AppCompatActivity() {
                     is LookItem.External -> look.cube
                     is LookItem.Diag -> null
                 }
-                val composedFloat = LutMath.compose(first, second, 33)
-                val composed = CubeParser.pack(composedFloat)
+                val full = cachedFull ?: LutMath.compose(first, second, 33)
+                val base = cachedBase ?: LutMath.compose(first, null, 33)
                 main.post {
-                    composedCache[key] = composed
-                    composedFloatCache[key] = composedFloat
-                    if (request == requestId) onReady(composed, composedFloat, label, fileLabel)
+                    composedFloatCache[key] = full
+                    composedFloatCache[baseKey] = base
+                    if (request == requestId) deliver(full, base)
                 }
             } catch (e: Exception) {
                 main.post { if (request == requestId) setStatus("LUT error ($label): ${e.message}") }
             }
         }
+    }
+
+    // Strength for the selected look, remembered per look for this session.
+    private val strengths = HashMap<Int, Float>()
+
+    private fun lookStrength(): Float = strengths[selectedLook] ?: 1f
+
+    private fun updateStrengthRow() {
+        val look = looks[selectedLook]
+        val adjustable = look !is LookItem.Original && look !is LookItem.Diag
+        val pct = (lookStrength() * 100).roundToInt()
+        strengthSlider.value = pct.toFloat()
+        strengthSlider.isEnabled = adjustable
+        strengthValue.text = if (adjustable) "$pct%" else "–"
     }
 
     // Choosing an input or a look applies it to the playing or paused video straight away.
@@ -1136,14 +1195,13 @@ class MainActivity : AppCompatActivity() {
         exportButton.isEnabled = ready && transformer == null
     }
 
-    // The status line only appears for errors, exports and diagnostics, so it doesn't change the
-    // video's height every time a look is picked.
+    // The status line sits over the video and only appears for errors, exports and diagnostics.
     private var statusShown = false
 
     private fun setStatus(s: String) {
         status.text = s
         statusShown = true
-        if (!fullscreen) status.visibility = View.VISIBLE
+        status.visibility = View.VISIBLE
     }
 
     private fun clearStatus() {

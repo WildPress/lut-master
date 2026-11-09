@@ -82,12 +82,37 @@
             android:layout_gravity="center"
             android:text="@string/pick_video"
             app:icon="@drawable/ic_folder_open" />
+        <!-- Status and export progress sit over the video so they never change its size. -->
+        <com.google.android.material.progressindicator.LinearProgressIndicator
+            android:id="@+id/progress"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top"
+            android:max="100"
+            android:visibility="gone"
+            app:trackCornerRadius="0dp" />
+
+        <TextView
+            android:id="@+id/status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|start"
+            android:layout_margin="8dp"
+            android:background="@drawable/badge_bg"
+            android:maxLines="3"
+            android:ellipsize="end"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="4dp"
+            android:textColor="#FFFFFFFF"
+            android:textSize="12sp"
+            android:visibility="gone" />
     </app.lutapply.HoldToCompareLayout>
 
     <LinearLayout
         android:id="@+id/profileRow"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:visibility="gone"
         android:background="@color/surface_container"
         android:gravity="center_vertical"
         android:orientation="horizontal"
@@ -111,6 +136,44 @@
             android:maxLines="1"
             app:icon="@drawable/ic_arrow_drop_down"
             app:iconGravity="end" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/strengthRow"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/surface_container"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="16dp"
+        android:paddingEnd="12dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/strength_label"
+            android:textColor="?colorOnSurfaceVariant"
+            android:textSize="13sp" />
+
+        <com.google.android.material.slider.Slider
+            android:id="@+id/strength"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:stepSize="5"
+            android:value="100"
+            android:valueFrom="0"
+            android:valueTo="100"
+            app:labelBehavior="gone" />
+
+        <TextView
+            android:id="@+id/strengthValue"
+            android:layout_width="44dp"
+            android:layout_height="wrap_content"
+            android:gravity="end"
+            android:text="100%"
+            android:textColor="?colorOnSurface"
+            android:textSize="13sp" />
     </LinearLayout>
 
     <HorizontalScrollView
@@ -139,17 +202,6 @@
         android:paddingBottom="8dp" />
 
     <TextView
-        android:id="@+id/status"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:background="@color/surface_container"
-        android:paddingHorizontal="16dp"
-        android:paddingVertical="6dp"
-        android:textColor="?colorOnSurfaceVariant"
-        android:textSize="13sp"
-        android:visibility="gone" />
-
-    <TextView
         android:id="@+id/debug"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -159,12 +211,4 @@
         android:textColor="@color/on_surface_dim"
         android:textSize="11sp"
         android:visibility="gone" />
-
-    <com.google.android.material.progressindicator.LinearProgressIndicator
-        android:id="@+id/progress"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:max="100"
-        android:visibility="gone"
-        app:trackCornerRadius="0dp" />
 </LinearLayout>

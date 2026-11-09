@@ -322,17 +322,28 @@ LOOKS = {
                            mid=(0.0, -0.003, 0.008), hi=(0.035, 0.005, -0.035), gain=(1.0, 0.99, 0.96))),
 }
 
-FLOORS = {
-    "blacks-red": (0.10, 0.015, 0.02),
-    "blacks-blue": (0.015, 0.03, 0.11),
-    "blacks-teal": (0.01, 0.075, 0.085),
-    "blacks-magenta": (0.08, 0.01, 0.085),
-    "blacks-green": (0.02, 0.10, 0.02),
-    "blacks-amber": (0.10, 0.055, 0.01),
+def tint_shadows(x, delta, reach=0.5, crush=0.015):
+    """Strong shadow tint meant to sit on top of a base look. Each delta adds the tint colour and
+    takes away its opposite, so shadows change colour rather than just turning grey, and a small
+    crush keeps the blacks dense. Strength in the app scales it down."""
+    y = luma(x)
+    w = (1 - smoothstep(0.0, reach, y))[..., None]
+    x = x + w * np.array(delta)
+    x = (x - crush) / (1 - crush)
+    return np.clip(x, 0, 1)
+
+
+BLACK_TINTS = {
+    "blacks-red": (0.14, -0.03, -0.03),
+    "blacks-amber": (0.13, 0.065, -0.06),
+    "blacks-green": (-0.04, 0.12, -0.04),
+    "blacks-teal": (-0.06, 0.085, 0.105),
+    "blacks-blue": (-0.03, 0.025, 0.15),
+    "blacks-magenta": (0.12, -0.04, 0.12),
 }
-for _k, _fl in FLOORS.items():
-    LOOKS[_k] = dict(title=f"Tinted blacks {_k.split('-')[1]} (Rec.709 in/out)",
-                     fn=(lambda f: (lambda x: tint_black(x, f)))(_fl))
+for _k, _d in BLACK_TINTS.items():
+    LOOKS[_k] = dict(title=f"Tinted blacks {_k.split('-')[1]} (Rec.709 in/out, use as a layer)",
+                     fn=(lambda d: (lambda x: tint_shadows(x, d)))(_d))
 
 
 def foggy(x, glow=(0, 0, 0), knee=0.78, glow_lo=0.45, glow_sat=0.28, **kw):
@@ -381,6 +392,194 @@ BAMBOO_LOOKS = {
 
 
 # ----------------------------------------------------------------------------
+# Creative looks, one folder per category (folder name -> chip title in the app)
+# ----------------------------------------------------------------------------
+def overlay(a, b):
+    return np.where(a < 0.5, 2 * a * b, 1 - 2 * (1 - a) * (1 - b))
+
+
+def keep_hue(x, center, width, others=0.15, boost=1.2):
+    """Selective colour: one hue range keeps (and gains) saturation, everything else drains."""
+    hsv = rgb2hsv(x)
+    dh = (hsv[..., 0] - center + 180.0) % 360.0 - 180.0
+    w = np.exp(-0.5 * (dh / width) ** 2) * smoothstep(0.08, 0.3, hsv[..., 1])
+    s = hsv[..., 1] * (others + (boost - others) * w)
+    return hsv2rgb(np.stack([hsv[..., 0], np.clip(s, 0, 1), hsv[..., 2]], -1))
+
+
+def look(x, mix=None, bleach=0.0, keep=None, tone=None, shadows=None, **kw):
+    """grade() plus a channel mixer before it, and bleach bypass, selective colour, a mono tone
+    (sepia etc) and a shadow tint after it."""
+    x = np.clip(x, 0, 1)
+    if mix is not None:
+        x = np.clip(x @ np.array(mix).T, 0, 1)
+    x = grade(x, **kw)
+    if keep:
+        x = keep_hue(x, *keep)
+    if bleach:
+        y = np.repeat(luma(x)[..., None], 3, -1)
+        x = x * (1 - bleach) + overlay(y, x) * bleach
+    if tone is not None:
+        y = luma(x)[..., None]
+        x = overlay(y, np.array(tone) * np.ones_like(x))
+    if shadows is not None:
+        x = tint_shadows(x, *shadows)
+    return np.clip(x, 0, 1)
+
+
+CATEGORY_LOOKS = {
+    "cinematic": {
+        "teal-and-orange": dict(
+            title="Teal and orange (warm skin, teal shadows and blues)",
+            fn=lambda x: look(x, g=1.15, sat=1.05, sh=(-0.035, 0.012, 0.04), hi=(0.03, 0.01, -0.025),
+                              hue=[(25, 22, 1.15, 0, 1.0), (215, 45, 1.1, -25, 0.95), (120, 40, 0.7, 45, 0.95),
+                                   (60, 20, 0.85, -10, 1.0)])),
+        "blockbuster": dict(
+            title="Blockbuster (punchy contrast, hard teal-orange split)",
+            fn=lambda x: look(x, g=1.32, sat=1.12, crush=0.015, sh=(-0.05, 0.015, 0.055),
+                              hi=(0.05, 0.015, -0.04),
+                              hue=[(25, 22, 1.2, 0, 1.0), (210, 50, 1.2, -25, 0.92), (120, 45, 0.6, 50, 0.9)])),
+        "golden-hour": dict(
+            title="Golden hour (warm glow, soft contrast)",
+            fn=lambda x: look(x, g=1.05, sat=1.08, gain=(1.05, 1.0, 0.86), lift=(0.02, 0.012, 0.0),
+                              hi=(0.03, 0.015, -0.02), hue=[(40, 30, 1.15, -5, 1.0)])),
+        "nordic-noir": dict(
+            title="Nordic noir (cold, muted, steel-blue shadows)",
+            fn=lambda x: look(x, g=1.18, sat=0.58, gain=(0.95, 0.99, 1.04), sh=(-0.02, 0.0, 0.025),
+                              lift=(0.01, 0.014, 0.02), hue=[(120, 45, 0.6, 20, 0.95)])),
+        "desert-heat": dict(
+            title="Desert heat (scorched orange, teal shadows)",
+            fn=lambda x: look(x, g=1.25, sat=1.2, gain=(1.08, 0.97, 0.78), crush=0.01,
+                              sh=(-0.03, 0.02, 0.03), hue=[(35, 35, 1.3, -5, 1.0), (210, 40, 1.0, -15, 1.0)])),
+        "day-for-night": dict(
+            title="Day for night (moonlit blue, darkened, low saturation)",
+            fn=lambda x: look(x, g=1.2, sat=0.45, gamma=(1.55, 1.45, 1.25), gain=(0.72, 0.82, 1.0),
+                              sh=(-0.01, 0.0, 0.015))),
+    },
+    "moody": {
+        "faded-matte": dict(
+            title="Faded matte (lifted blacks, soft highlights, muted colour)",
+            fn=lambda x: look(x, g=0.92, sat=0.78, lift=(0.07, 0.068, 0.072), gain=(0.93, 0.93, 0.92))),
+        "dark-forest": dict(
+            title="Dark forest (deep olive greens, heavy shadows)",
+            fn=lambda x: look(x, g=1.22, sat=0.82, gamma=(1.12, 1.08, 1.12), crush=0.01,
+                              sh=(-0.01, 0.012, 0.0), hue=[(110, 45, 0.75, -20, 0.85), (25, 22, 0.9, 0, 1.0)])),
+        "blue-hour": dict(
+            title="Blue hour (cool dusk, gentle contrast)",
+            fn=lambda x: look(x, g=1.08, sat=0.9, gain=(0.92, 0.97, 1.06), sh=(-0.015, 0.0, 0.03),
+                              hi=(0.0, 0.0, 0.015))),
+        "melancholy": dict(
+            title="Melancholy (grey-green, desaturated, soft)",
+            fn=lambda x: look(x, g=1.0, sat=0.55, gain=(0.96, 1.0, 0.96), lift=(0.03, 0.04, 0.035))),
+    },
+    "horror": {
+        "sickly-green": dict(
+            title="Sickly green (jaundiced mids, crushed blacks, drained skin)",
+            fn=lambda x: look(x, g=1.3, sat=0.7, crush=0.03, mid=(-0.01, 0.035, -0.035),
+                              gain=(0.94, 1.03, 0.85), hue=[(25, 25, 0.55, 15, 0.95)])),
+        "blood-red": dict(
+            title="Blood red (only reds keep colour, everything else drained and dark)",
+            fn=lambda x: look(x, g=1.35, crush=0.025, gamma=(1.1, 1.15, 1.15), keep=(0, 22, 0.08, 1.5))),
+        "cold-dread": dict(
+            title="Cold dread (icy cyan, harsh contrast, near-mono)",
+            fn=lambda x: look(x, g=1.45, sat=0.3, crush=0.035, gain=(0.86, 0.98, 1.04),
+                              sh=(-0.01, 0.01, 0.02))),
+        "haunted": dict(
+            title="Haunted (sepia-green mono, deep vignette-like shadows)",
+            fn=lambda x: look(x, g=1.4, crush=0.03, gamma=(1.15, 1.15, 1.15), mono=(0.3, 0.59, 0.11),
+                              tone=(0.48, 0.52, 0.40))),
+    },
+    "cyberpunk": {
+        "neon-nights": dict(
+            title="Neon nights (magenta highlights, cyan shadows, saturated)",
+            fn=lambda x: look(x, g=1.22, sat=1.35, sh=(-0.05, 0.02, 0.06), hi=(0.06, -0.02, 0.05),
+                              hue=[(120, 45, 1.0, 50, 0.95), (60, 30, 1.1, -30, 1.0), (215, 45, 1.3, -10, 1.0)])),
+        "synthwave": dict(
+            title="Synthwave (purple shadows, hot pink and orange highlights)",
+            fn=lambda x: look(x, g=1.15, sat=1.25, sh=(0.03, -0.02, 0.07), mid=(0.02, -0.02, 0.02),
+                              hi=(0.06, 0.0, -0.01), hue=[(120, 50, 0.8, 80, 0.9), (210, 40, 1.15, 22, 1.0)])),
+        "digital-green": dict(
+            title="Digital green (green-tinted code world, hard contrast)",
+            fn=lambda x: look(x, g=1.3, sat=0.6, crush=0.02, gain=(0.85, 1.05, 0.82),
+                              mid=(-0.02, 0.03, -0.02), sh=(-0.01, 0.015, 0.0))),
+        "acid-cyan": dict(
+            title="Acid cyan (electric cyan and yellow, crushed blacks)",
+            fn=lambda x: look(x, g=1.3, sat=1.4, crush=0.02, sh=(-0.05, 0.03, 0.05),
+                              hi=(0.03, 0.04, -0.03), hue=[(210, 50, 1.3, -25, 1.0), (25, 25, 0.9, 15, 1.0)])),
+    },
+    "vintage": {
+        "seventies": dict(
+            title="Seventies (warm, faded, yellow-green shadows)",
+            fn=lambda x: look(x, g=1.0, sat=0.88, lift=(0.06, 0.055, 0.03), gain=(1.02, 0.98, 0.86),
+                              sh=(0.0, 0.015, -0.015), hue=[(210, 40, 0.75, 15, 1.0)])),
+        "eighties-video": dict(
+            title="Eighties video (hot reds, magenta cast, lifted and soft)",
+            fn=lambda x: look(x, g=0.95, sat=1.25, lift=(0.05, 0.035, 0.05), gain=(1.0, 0.95, 1.0),
+                              hue=[(0, 25, 1.3, 0, 1.0), (120, 40, 0.8, 0, 1.0)])),
+        "instant-film": dict(
+            title="Instant film (cyan shadows, creamy warm highlights, faded)",
+            fn=lambda x: look(x, g=0.98, sat=0.85, lift=(0.04, 0.06, 0.07), gain=(0.98, 0.96, 0.9),
+                              sh=(-0.02, 0.01, 0.025), hi=(0.03, 0.02, -0.01))),
+        "super-8": dict(
+            title="Super 8 (warm, contrasty, yellowed home movie)",
+            fn=lambda x: look(x, g=1.28, sat=1.1, crush=0.02, lift=(0.03, 0.02, 0.0),
+                              gain=(1.04, 0.98, 0.8))),
+        "cross-process": dict(
+            title="Cross process (yellow-green highlights, blue shadows, wild colour)",
+            fn=lambda x: look(x, g=1.2, sat=1.2, gamma=(0.85, 0.9, 1.25), lift=(0.0, 0.0, 0.08),
+                              gain=(1.05, 1.05, 0.85))),
+        "sepia": dict(
+            title="Sepia (warm brown mono)",
+            fn=lambda x: look(x, g=1.1, mono=(0.3, 0.59, 0.11), tone=(0.6, 0.48, 0.36), lift=(0.02, 0.015, 0.01))),
+    },
+    "black-and-white": {
+        "noir": dict(
+            title="Noir (hard black and white, crushed shadows)",
+            fn=lambda x: look(x, g=1.55, crush=0.04, mono=(0.3, 0.6, 0.1))),
+        "silver-soft": dict(
+            title="Silver soft (gentle matte black and white)",
+            fn=lambda x: look(x, g=0.95, lift=(0.05, 0.05, 0.05), gain=(0.95, 0.95, 0.95), mono=(0.25, 0.65, 0.1))),
+        "red-filter": dict(
+            title="Red filter (black and white, dark skies, bright skin)",
+            fn=lambda x: look(x, g=1.3, mono=(0.75, 0.3, -0.05))),
+        "selenium": dict(
+            title="Selenium (cool-toned black and white)",
+            fn=lambda x: look(x, g=1.25, mono=(0.3, 0.6, 0.1), tone=(0.46, 0.49, 0.56))),
+    },
+    "vivid": {
+        "pop": dict(
+            title="Pop (bright, clean, saturated)",
+            fn=lambda x: look(x, g=1.15, sat=1.38, hue=[(25, 22, 0.85, 0, 1.0)])),
+        "tropical": dict(
+            title="Tropical (aqua blues, lush greens, warm skin)",
+            fn=lambda x: look(x, g=1.12, sat=1.25, gain=(1.0, 1.0, 0.98),
+                              hue=[(210, 40, 1.35, -20, 1.0), (110, 40, 1.3, 10, 1.0), (25, 22, 1.05, 0, 1.0)])),
+    },
+    "gritty": {
+        "bleach-bypass": dict(
+            title="Bleach bypass (silvery, harsh, low saturation)",
+            fn=lambda x: look(x, g=1.15, sat=0.85, bleach=0.75)),
+        "urban-grit": dict(
+            title="Urban grit (cool green-grey, hard contrast)",
+            fn=lambda x: look(x, g=1.35, sat=0.6, crush=0.02, gain=(0.95, 1.0, 0.97),
+                              sh=(-0.015, 0.01, 0.01), bleach=0.3)),
+    },
+    "quirky": {
+        "infrared": dict(
+            title="Infrared (pink-white foliage, dark skies)",
+            fn=lambda x: look(x, mix=[(0.15, 0.85, 0.0), (0.2, 0.4, 0.4), (0.7, 0.1, 0.2)], g=1.15, sat=0.9)),
+        "pastel-pink": dict(
+            title="Pastel pink (candy colours, soft and lifted)",
+            fn=lambda x: look(x, g=0.9, sat=0.85, lift=(0.08, 0.06, 0.07), gain=(1.0, 0.96, 0.97),
+                              hi=(0.02, -0.005, 0.01), hue=[(120, 45, 0.7, 30, 1.0)])),
+        "lomo": dict(
+            title="Lomo (oversaturated, contrasty, warm-green cast)",
+            fn=lambda x: look(x, g=1.4, sat=1.45, crush=0.03, gain=(1.0, 1.02, 0.88))),
+    },
+}
+
+
+# ----------------------------------------------------------------------------
 # Input transform: log code -> Rec.709 display
 # ----------------------------------------------------------------------------
 def input_transform(prof, code):
@@ -396,14 +595,15 @@ def grid():
     return np.stack([R, G, B], -1)  # [b, g, r, 3]
 
 
-def write_cube(path, title, comments, lut):
+def write_cube(path, title, comments, lut, digits=6):
     with open(path, "w") as f:
         f.write(f'TITLE "{title}"\n')
         for c in comments:
             f.write(f"# {c}\n")
         f.write(f"LUT_3D_SIZE {N}\nDOMAIN_MIN 0.0 0.0 0.0\nDOMAIN_MAX 1.0 1.0 1.0\n")
+        fmt = f"%.{digits}f %.{digits}f %.{digits}f\n"
         for row in lut.reshape(-1, 3):
-            f.write("%.6f %.6f %.6f\n" % tuple(row))
+            f.write(fmt % tuple(row))
 
 
 def apply_lut(lut, img):
@@ -556,6 +756,34 @@ def bamboo_sheet(look_luts):
     sheet.save(os.path.join(HERE, "bamboo-sheet.png"))
 
 
+def photo_sheet(look_luts):
+    """Every creative look and tinted-blacks layer on a neutral reference photo (ref/street.jpg, AI-generated)."""
+    src = os.path.join(HERE, "ref", "street.jpg")
+    if not os.path.exists(src):
+        return
+    img = Image.open(src).convert("RGB")
+    img = np.asarray(img.resize((384, 256), Image.LANCZOS), dtype=np.float64) / 255.0
+    tiles = [("reference", img)]
+    names = [f"{f}/{n}" for f, grp in CATEGORY_LOOKS.items() for n in grp] + list(BLACK_TINTS)
+    for name in names:
+        tiles.append((name, apply_lut(look_luts[name], img)))
+    for k in ("blacks-teal", "blacks-amber"):
+        tiles.append((f"teal-and-orange + {k}", apply_lut(look_luts[k], apply_lut(look_luts["cinematic/teal-and-orange"], img))))
+    tw, th, lab, cols = 384, 256, 20, 6
+    rows = (len(tiles) + cols - 1) // cols
+    sheet = Image.new("RGB", (cols * tw, rows * (th + lab)), (24, 24, 24))
+    dr = ImageDraw.Draw(sheet)
+    try:
+        font = ImageFont.load_default(size=14)
+    except TypeError:
+        font = ImageFont.load_default()
+    for i, (name, arr) in enumerate(tiles):
+        cx, cy = (i % cols) * tw, (i // cols) * (th + lab)
+        sheet.paste(Image.fromarray(to_u8(arr)), (cx, cy + lab))
+        dr.text((cx + 4, cy + 2), name, fill=(235, 235, 235), font=font)
+    sheet.save(os.path.join(HERE, "photo-sheet.jpg"), quality=85)
+
+
 def main():
     for f in glob.glob(os.path.join(OUT, "**", "*.cube"), recursive=True):
         os.remove(f)
@@ -602,6 +830,16 @@ def main():
                    ["Input and output: Rec.709 display-referred. Apply after any input transform.",
                     "Vivid looks for foggy foliage. Tone and colour only: a LUT cannot blur or add bloom."], lut)
 
+    for folder, group in CATEGORY_LOOKS.items():
+        os.makedirs(os.path.join(OUT_LOOK, folder), exist_ok=True)
+        for name, lk in group.items():
+            lut = np.clip(lk["fn"](g), 0.0, 1.0)
+            look_luts[f"{folder}/{name}"] = lut
+            # 4 decimals is ten times finer than a 10-bit step and keeps the APK smaller.
+            write_cube(os.path.join(OUT_LOOK, folder, name + ".cube"), lk["title"],
+                       ["Input and output: Rec.709 display-referred. Apply after any input transform."],
+                       lut, digits=4)
+
     # --- anchor checks vs published code values ---------------------------
     print("== log anchors: computed 10-bit code vs published ==")
     for name, prof in PROFILES.items():
@@ -646,9 +884,10 @@ def main():
     print("== blacks-* through S-Log3 input transform: black patch ==")
     blk_code = ref["enc"](np.array([[0.0, 0.0, 0.0]]))
     base = apply_lut(in_luts["sony-slog3-to-rec709"], blk_code)
-    for k, fl in FLOORS.items():
+    for k in BLACK_TINTS:
         out = apply_lut(look_luts[k], base)[0]
-        print(f"  {k}: black -> {np.round(out, 3)} target {fl}")
+        dark = apply_lut(look_luts[k], np.array([[0.12, 0.12, 0.12]]))[0]
+        print(f"  {k}: black -> {np.round(out, 3)}, 0.12 grey -> {np.round(dark, 3)}")
 
     # --- contact sheet -------------------------------------------------
     scene = scene_linear709()
@@ -673,7 +912,9 @@ def main():
         d.text((cx + 4, cy + 3), name, fill=(235, 235, 235), font=font)
     sheet.save(os.path.join(HERE, "contact-sheet.png"))
     bamboo_sheet(look_luts)
-    print(f"wrote {len(PROFILES) + 1} input LUTs, {len(LOOKS) + len(BAMBOO_LOOKS)} looks, "
+    photo_sheet(look_luts)
+    n_cat = sum(len(grp) for grp in CATEGORY_LOOKS.values())
+    print(f"wrote {len(PROFILES) + 1} input LUTs, {len(LOOKS) + len(BAMBOO_LOOKS) + n_cat} looks, "
           "contact-sheet.png, bamboo-sheet.png")
 
 
