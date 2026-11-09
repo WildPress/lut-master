@@ -52,6 +52,7 @@ import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.progressindicator.LinearProgressIndicator
+import com.google.android.material.slider.Slider
 import com.google.android.material.snackbar.Snackbar
 import java.io.File
 import java.io.InputStream
@@ -107,6 +108,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var looksAdapter: LooksAdapter
     private lateinit var placeholder: View
     private lateinit var layersAdapter: LayersAdapter
+    private lateinit var layersPanel: View
+    private lateinit var strengthSlider: Slider
+    private lateinit var strengthValue: TextView
+    private lateinit var tips: Tips
     private lateinit var compareBadge: TextView
     private lateinit var backCallback: OnBackPressedCallback
     private var loadedInputCount = 0
@@ -116,7 +121,7 @@ class MainActivity : AppCompatActivity() {
     private val floatCache = HashMap<String, FloatCube>()
     private var selectedInput = 0
 
-    // The layer stack in display order (row 0 is the top layer, applied last). The looks grid edits
+    // The layer stack, bottom first: layer 0 applies first and shows leftmost. The looks grid edits
     // the selected layer.
     private val layers = mutableListOf(Layer(0))
     private val selectedLayer get() = layersAdapter.selected
@@ -208,6 +213,7 @@ class MainActivity : AppCompatActivity() {
         placeholder = findViewById(R.id.placeholder)
         compareBadge = findViewById(R.id.compareBadge)
         playerView = findViewById(R.id.player)
+        tips = Tips(this, prefs)
 
         advKeepColour = prefs.getBoolean("adv_keepcolour", false)
         advDiag = prefs.getBoolean("adv_diag", false)
@@ -295,9 +301,11 @@ class MainActivity : AppCompatActivity() {
         placeholder.setOnClickListener { pickVideo.launch(arrayOf("video/*")) }
         exportButton.setOnClickListener { startExport() }
         if (inputs.size == 1 && looks.size == 1) setStatus("No bundled LUTs found. Use the menu to load one.")
+        tips.show("looks", looksList, R.string.tip_looks, Tips.Place.INSIDE_TOP)
     }
 
     override fun onDestroy() {
+        tips.dismiss()
         transformer?.cancel()
         player.release()
         io.shutdown()
@@ -368,15 +376,18 @@ class MainActivity : AppCompatActivity() {
         updateExportEnabled()
         applySelection()
         updateDebug()
+        tips.show("compare", findViewById(R.id.playerHolder), R.string.tip_compare, Tips.Place.INSIDE_TOP)
     }
 
     private fun setFullscreen(on: Boolean) {
         if (fullscreen == on) return
         fullscreen = on
         val vis = if (on) View.GONE else View.VISIBLE
-        for (id in intArrayOf(R.id.toolbar, R.id.layersPanel, R.id.chipScroll, R.id.looksList)) {
+        if (on) tips.dismiss()
+        for (id in intArrayOf(R.id.toolbar, R.id.chipScroll, R.id.looksList)) {
             findViewById<View>(id).visibility = vis
         }
+        updateLayersPanel()
         updateProfileRow()
         if (advDiag) debug.visibility = vis
         playerView.setFullscreenButtonState(on)
@@ -618,7 +629,8 @@ class MainActivity : AppCompatActivity() {
         if (layer.look == index) return
         layer.look = index
         looksAdapter.selectedIndex = index
-        layersAdapter.notifyDataSetChanged()
+        layersAdapter.reset(selectedLayer)
+        updateLayersPanel()
         updateExportEnabled()
         applySelection()
     }
@@ -626,51 +638,92 @@ class MainActivity : AppCompatActivity() {
     // ---- Layers ------------------------------------------------------------------------------
 
     private fun setupLayers() {
+        layersPanel = findViewById(R.id.layersPanel)
+        strengthSlider = findViewById(R.id.strength)
+        strengthValue = findViewById(R.id.strengthValue)
         layersAdapter = LayersAdapter(
             layers,
             nameOf = { l -> if (l.look == 0) null else looks.getOrNull(l.look)?.name },
             onSelect = { selectLayer(it) },
-            onStrength = { pos, v ->
-                layers[pos].strength = v
-                applySelection()
-            },
             onRemove = { removeLayer(it) },
             onMoved = {
+                layersAdapter.reset(selectedLayer)
                 applySelection()
                 regenerateThumbnails()
             },
         )
         val list = findViewById<RecyclerView>(R.id.layersList)
-        list.layoutManager = LinearLayoutManager(this)
+        list.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
         list.itemAnimator = null
         layersAdapter.attach(list)
         findViewById<MaterialButton>(R.id.addLayer).setOnClickListener { addLayer() }
+        strengthSlider.addOnChangeListener { _, value, fromUser ->
+            if (!fromUser) return@addOnChangeListener
+            layers[selectedLayer].strength = value / 100f
+            strengthValue.text = "${value.roundToInt()}%"
+            applySelection()
+        }
+        // The other layers' previews depend on this one's strength, so refresh them on release.
+        strengthSlider.addOnSliderTouchListener(object : Slider.OnSliderTouchListener {
+            override fun onStartTrackingTouch(slider: Slider) = Unit
+            override fun onStopTrackingTouch(slider: Slider) {
+                if (layers.size > 1) regenerateThumbnails()
+            }
+        })
+        updateStrength()
+    }
+
+    // The panel only appears once there's a look to stack on.
+    private fun updateLayersPanel() {
+        val show = !fullscreen && (layers.size > 1 || layers[0].look != 0)
+        val was = layersPanel.visibility == View.VISIBLE
+        layersPanel.visibility = if (show) View.VISIBLE else View.GONE
+        if (show && !was) tips.show("layers", findViewById(R.id.addLayer), R.string.tip_layers, Tips.Place.BELOW)
+    }
+
+    private fun updateStrength() {
+        val pct = (layers[selectedLayer].strength * 100).roundToInt()
+        strengthSlider.value = (pct / 5 * 5).toFloat()
+        strengthValue.text = "$pct%"
     }
 
     private fun selectLayer(pos: Int) {
         if (pos == selectedLayer) return
-        layersAdapter.select(pos)
+        var target = pos
+        // Moving off a layer that never got a look drops it.
+        val old = selectedLayer
+        if (layers[old].look == 0 && layers.size > 1) {
+            layers.removeAt(old)
+            if (old < target) target--
+            layersAdapter.reset(target)
+        } else {
+            layersAdapter.select(target)
+        }
         looksAdapter.selectedIndex = selectedLook
+        updateStrength()
         regenerateThumbnails()
     }
 
-    // A new layer goes on top of the stack and is selected, so the next look tapped fills it.
+    // A new layer goes on top of the stack (rightmost) and is selected, so the next look tapped fills it.
     private fun addLayer() {
+        val empty = layers.indexOfFirst { it.look == 0 }
+        if (empty >= 0) {
+            selectLayer(empty)
+            return
+        }
         if (layers.size >= MAX_LAYERS) {
             Snackbar.make(snackbarAnchor(), getString(R.string.max_layers, MAX_LAYERS), Snackbar.LENGTH_SHORT).show()
             return
         }
-        if (layers[0].look == 0) {
-            selectLayer(0)
-            return
-        }
-        layers.add(0, Layer(0))
-        layersAdapter.reset(0)
+        layers.add(Layer(0))
+        layersAdapter.reset(layers.size - 1)
+        findViewById<RecyclerView>(R.id.layersList).scrollToPosition(layers.size - 1)
         looksAdapter.selectedIndex = 0
+        updateStrength()
         regenerateThumbnails()
     }
 
-    // Removing the last layer just empties it, so there is always one to pick looks into.
+    // Removing the last layer just empties it, which hides the panel again.
     private fun removeLayer(pos: Int) {
         if (comparing) endCompare()
         var sel = selectedLayer
@@ -683,6 +736,8 @@ class MainActivity : AppCompatActivity() {
         }
         layersAdapter.reset(sel.coerceIn(0, layers.size - 1))
         looksAdapter.selectedIndex = selectedLook
+        updateStrength()
+        updateLayersPanel()
         updateExportEnabled()
         applySelection()
         regenerateThumbnails()
@@ -692,7 +747,7 @@ class MainActivity : AppCompatActivity() {
 
     // Layers that change the picture, bottom first.
     private fun activeStack(): List<Pair<LookItem, Float>> =
-        layers.asReversed().map { looks[it.look] to it.strength }
+        layers.map { looks[it.look] to it.strength }
             .filter { (look, _) -> look !is LookItem.Original && look !is LookItem.Diag }
 
     private fun layerCube(look: LookItem): FloatCube = when (look) {
@@ -809,8 +864,8 @@ class MainActivity : AppCompatActivity() {
         val order = (visible + looks.indices.filter { it !in visibleSet }).map { it to looks[it] }
         fun usable(l: Layer) = looks[l.look].let { it !is LookItem.Original && it !is LookItem.Diag }
         val sel = selectedLayer
-        val below = layers.subList(sel + 1, layers.size).asReversed().filter(::usable).map { looks[it.look] to it.strength }
-        val above = layers.subList(0, sel).asReversed().filter(::usable).map { looks[it.look] to it.strength }
+        val below = layers.subList(0, sel).filter(::usable).map { looks[it.look] to it.strength }
+        val above = layers.subList(sel + 1, layers.size).filter(::usable).map { looks[it.look] to it.strength }
         val w = base.width
         val h = base.height
         thumbIo.execute {

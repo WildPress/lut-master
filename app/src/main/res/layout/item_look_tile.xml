@@ -10,6 +10,7 @@
     app:cardBackgroundColor="@color/surface_container_high"
     app:cardCornerRadius="10dp"
     app:cardElevation="0dp"
+    app:cardForegroundColor="@android:color/transparent"
     app:checkedIcon="@null"
     app:strokeColor="@color/card_stroke_color"
     app:strokeWidth="2dp">
