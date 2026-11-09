@@ -362,6 +362,8 @@ class MainActivity : AppCompatActivity() {
     private fun swapEffects(effects: List<Effect>) {
         val position = player.currentPosition
         val playing = player.playWhenReady
+        // Changing the grade shouldn't bring up the controls. They only appear when the video is tapped.
+        val controlsShown = playerView.isControllerFullyVisible
         player.setVideoEffects(effects)
         effectsApplied++
         if (player.mediaItemCount > 0 && player.playbackState != Player.STATE_IDLE) {
@@ -369,6 +371,7 @@ class MainActivity : AppCompatActivity() {
             if (!playing || abs(player.currentPosition - position) > 300) player.seekTo(position)
         }
         player.playWhenReady = playing
+        if (!controlsShown) playerView.hideController()
         updateDebug()
     }
 

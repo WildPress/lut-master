@@ -28,6 +28,7 @@
             android:id="@+id/player"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
+            app:auto_show="false"
             app:resize_mode="fit"
             app:show_buffering="when_playing"
             app:show_fastforward_button="false"
@@ -176,8 +177,10 @@
             android:layout_weight="1"
             android:enabled="false"
             android:text="@string/export"
-            app:backgroundTint="@color/export_green"
+            android:textColor="@color/export_button_fg"
+            app:backgroundTint="@color/export_button_bg"
             app:icon="@android:drawable/ic_menu_save"
+            app:iconTint="@color/export_button_fg"
             app:iconGravity="textStart" />
     </LinearLayout>
 </LinearLayout>

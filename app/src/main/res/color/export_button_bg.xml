@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Solid green when there's something to export, a plain dark grey until then. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:color="#FF33353A" android:state_enabled="false" />
+    <item android:color="#FF81C784" />
+</selector>
