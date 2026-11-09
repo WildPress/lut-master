@@ -44,6 +44,7 @@ import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
@@ -51,7 +52,6 @@ import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.progressindicator.LinearProgressIndicator
-import com.google.android.material.slider.Slider
 import com.google.android.material.snackbar.Snackbar
 import java.io.File
 import java.io.InputStream
@@ -106,8 +106,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var looksList: RecyclerView
     private lateinit var looksAdapter: LooksAdapter
     private lateinit var placeholder: View
-    private lateinit var strengthSlider: Slider
-    private lateinit var strengthValue: TextView
+    private lateinit var layersAdapter: LayersAdapter
     private lateinit var compareBadge: TextView
     private lateinit var backCallback: OnBackPressedCallback
     private var loadedInputCount = 0
@@ -115,9 +114,13 @@ class MainActivity : AppCompatActivity() {
     private val inputs = ArrayList<InputEntry>()
     private val looks = ArrayList<LookItem>()
     private val floatCache = HashMap<String, FloatCube>()
-    private val composedCache = HashMap<String, Array<Array<IntArray>>>()
     private var selectedInput = 0
-    private var selectedLook = 0
+
+    // The layer stack in display order (row 0 is the top layer, applied last). The looks grid edits
+    // the selected layer.
+    private val layers = mutableListOf(Layer(0))
+    private val selectedLayer get() = layersAdapter.selected
+    private val selectedLook get() = layers[selectedLayer].look
     private var externalCount = 0
     private var requestId = 0
     private var videoUri: Uri? = null
@@ -148,7 +151,12 @@ class MainActivity : AppCompatActivity() {
         lutEffects = listOf(liveLut)
         return lutEffects
     }
-    private val composedFloatCache = HashMap<String, FloatCube>()
+
+    // Recent baked stacks, so stepping back to a previous combination is instant. Bounded because a
+    // strength drag produces a new combination at every step.
+    private val bakedCache = object : LinkedHashMap<String, Pair<Array<Array<IntArray>>, FloatCube>>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Array<Array<IntArray>>, FloatCube>>) = size > 16
+    }
 
     private var advKeepColour = false
     private var advDiag = false
@@ -198,8 +206,6 @@ class MainActivity : AppCompatActivity() {
         chips = findViewById(R.id.categoryChips)
         looksList = findViewById(R.id.looksList)
         placeholder = findViewById(R.id.placeholder)
-        strengthSlider = findViewById(R.id.strength)
-        strengthValue = findViewById(R.id.strengthValue)
         compareBadge = findViewById(R.id.compareBadge)
         playerView = findViewById(R.id.player)
 
@@ -281,18 +287,12 @@ class MainActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this, backCallback)
 
         setupInputs()
+        setupLayers()
         setupLooks()
         applySelection()
         updateDebug()
 
         placeholder.setOnClickListener { pickVideo.launch(arrayOf("video/*")) }
-        strengthSlider.addOnChangeListener { _, value, fromUser ->
-            if (!fromUser) return@addOnChangeListener
-            strengths[selectedLook] = value / 100f
-            strengthValue.text = "${value.roundToInt()}%"
-            applySelection()
-        }
-        updateStrengthRow()
         exportButton.setOnClickListener { startExport() }
         if (inputs.size == 1 && looks.size == 1) setStatus("No bundled LUTs found. Use the menu to load one.")
     }
@@ -374,7 +374,7 @@ class MainActivity : AppCompatActivity() {
         if (fullscreen == on) return
         fullscreen = on
         val vis = if (on) View.GONE else View.VISIBLE
-        for (id in intArrayOf(R.id.toolbar, R.id.strengthRow, R.id.chipScroll, R.id.looksList)) {
+        for (id in intArrayOf(R.id.toolbar, R.id.layersPanel, R.id.chipScroll, R.id.looksList)) {
             findViewById<View>(id).visibility = vis
         }
         updateProfileRow()
@@ -614,11 +614,91 @@ class MainActivity : AppCompatActivity() {
 
     private fun selectLook(index: Int) {
         if (comparing) endCompare()
-        selectedLook = index
-        updateStrengthRow()
+        val layer = layers[selectedLayer]
+        if (layer.look == index) return
+        layer.look = index
         looksAdapter.selectedIndex = index
+        layersAdapter.notifyDataSetChanged()
         updateExportEnabled()
         applySelection()
+    }
+
+    // ---- Layers ------------------------------------------------------------------------------
+
+    private fun setupLayers() {
+        layersAdapter = LayersAdapter(
+            layers,
+            nameOf = { l -> if (l.look == 0) null else looks.getOrNull(l.look)?.name },
+            onSelect = { selectLayer(it) },
+            onStrength = { pos, v ->
+                layers[pos].strength = v
+                applySelection()
+            },
+            onRemove = { removeLayer(it) },
+            onMoved = {
+                applySelection()
+                regenerateThumbnails()
+            },
+        )
+        val list = findViewById<RecyclerView>(R.id.layersList)
+        list.layoutManager = LinearLayoutManager(this)
+        list.itemAnimator = null
+        layersAdapter.attach(list)
+        findViewById<MaterialButton>(R.id.addLayer).setOnClickListener { addLayer() }
+    }
+
+    private fun selectLayer(pos: Int) {
+        if (pos == selectedLayer) return
+        layersAdapter.select(pos)
+        looksAdapter.selectedIndex = selectedLook
+        regenerateThumbnails()
+    }
+
+    // A new layer goes on top of the stack and is selected, so the next look tapped fills it.
+    private fun addLayer() {
+        if (layers.size >= MAX_LAYERS) {
+            Snackbar.make(snackbarAnchor(), getString(R.string.max_layers, MAX_LAYERS), Snackbar.LENGTH_SHORT).show()
+            return
+        }
+        if (layers[0].look == 0) {
+            selectLayer(0)
+            return
+        }
+        layers.add(0, Layer(0))
+        layersAdapter.reset(0)
+        looksAdapter.selectedIndex = 0
+        regenerateThumbnails()
+    }
+
+    // Removing the last layer just empties it, so there is always one to pick looks into.
+    private fun removeLayer(pos: Int) {
+        if (comparing) endCompare()
+        var sel = selectedLayer
+        if (layers.size == 1) {
+            layers[0].look = 0
+            layers[0].strength = 1f
+        } else {
+            layers.removeAt(pos)
+            if (pos < sel || sel >= layers.size) sel--
+        }
+        layersAdapter.reset(sel.coerceIn(0, layers.size - 1))
+        looksAdapter.selectedIndex = selectedLook
+        updateExportEnabled()
+        applySelection()
+        regenerateThumbnails()
+    }
+
+    private fun diagLook(): LookItem.Diag? = layers.firstNotNullOfOrNull { looks[it.look] as? LookItem.Diag }
+
+    // Layers that change the picture, bottom first.
+    private fun activeStack(): List<Pair<LookItem, Float>> =
+        layers.asReversed().map { looks[it.look] to it.strength }
+            .filter { (look, _) -> look !is LookItem.Original && look !is LookItem.Diag }
+
+    private fun layerCube(look: LookItem): FloatCube = when (look) {
+        is LookItem.Asset -> loadAsset(look.path)
+        is LookItem.External -> look.cube
+        else -> throw IllegalStateException("${look.name} is not a LUT")
     }
 
     private fun toggleFavourite(key: String) {
@@ -718,7 +798,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Grades the thumbnail frame with every look, visible ones first. A newer run cancels an older one.
+    // Grades the thumbnail frame with every look as it would look in the selected layer, with the
+    // layers below and above it in place. Visible tiles first. A newer run cancels an older one.
     private fun regenerateThumbnails() {
         val base = thumbFrame ?: return
         val gen = ++thumbGeneration
@@ -726,6 +807,10 @@ class MainActivity : AppCompatActivity() {
         val visible = looksAdapter.visibleLookIndices()
         val visibleSet = visible.toHashSet()
         val order = (visible + looks.indices.filter { it !in visibleSet }).map { it to looks[it] }
+        fun usable(l: Layer) = looks[l.look].let { it !is LookItem.Original && it !is LookItem.Diag }
+        val sel = selectedLayer
+        val below = layers.subList(sel + 1, layers.size).asReversed().filter(::usable).map { looks[it.look] to it.strength }
+        val above = layers.subList(0, sel).asReversed().filter(::usable).map { looks[it.look] to it.strength }
         val w = base.width
         val h = base.height
         thumbIo.execute {
@@ -736,18 +821,21 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 null
             }
+            val others = try {
+                below.map { (l, st) -> l to (layerCube(l) to st) } to above.map { (l, st) -> l to (layerCube(l) to st) }
+            } catch (e: Exception) {
+                return@execute
+            }
             for ((index, look) in order) {
                 if (gen != thumbGeneration) return@execute
                 if (look is LookItem.Diag) continue
                 try {
-                    val second = when (look) {
-                        is LookItem.Asset -> loadAsset(look.path)
-                        is LookItem.External -> look.cube
-                        else -> null
-                    }
-                    val stageOne = if (look is LookItem.External && look.full) null else first
+                    val candidate = if (look is LookItem.Original) emptyList() else listOf(look to (layerCube(look) to 1f))
+                    val stack = others.first + candidate + others.second
+                    val skipInput = stack.any { (l, _) -> l is LookItem.External && l.full }
                     val px = src.copyOf()
-                    if (stageOne != null || second != null) LutMath.applyToPixels(LutMath.compose(stageOne, second, 17), px)
+                    val stageOne = if (skipInput) null else first
+                    if (stageOne != null || stack.isNotEmpty()) LutMath.applyToPixels(LutMath.bake(stageOne, stack.map { it.second }, 17), px)
                     val bmp = Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
                     main.post { if (gen == thumbGeneration) looksAdapter.setThumbnail(index, bmp) }
                 } catch (e: Exception) {
@@ -771,74 +859,56 @@ class MainActivity : AppCompatActivity() {
                 synchronized(floatCache) { floatCache[path] = it }
             }
 
-    // Builds (and caches) one 33-point LUT for the current input + look pair. Null means no effect.
+    // Bakes the input transform and the layer stack into one 33-point LUT. Null means no effect.
     private fun resolve(onReady: (cube: Array<Array<IntArray>>?, floatCube: FloatCube?, label: String, fileLabel: String) -> Unit) {
         val input = inputs[selectedInput]
-        val look = looks[selectedLook]
-        val skipInput = look is LookItem.External && look.full
+        val stack = activeStack()
+        val skipInput = stack.any { (l, _) -> l is LookItem.External && l.full }
         val inputKey = when {
             skipInput || input.isRaw || input.isPassthrough -> null
             input.isLoaded -> "loaded-${input.id}"
             else -> input.path
         }
-        val lookKey = when (look) {
-            is LookItem.Original -> "original"
-            is LookItem.Asset -> look.path
-            is LookItem.External -> "external-${look.id}"
-            is LookItem.Diag -> "diag-${look.kind}"
-        }
-        val strength = if (look is LookItem.Original) 1f else lookStrength()
         val parts = ArrayList<String>()
         if (!skipInput) parts.add(input.name)
-        if (look !is LookItem.Original) parts.add(if (strength < 1f) "${look.name} ${(strength * 100).roundToInt()}%" else look.name)
+        for ((look, strength) in stack) {
+            parts.add(if (strength < 0.999f) "${look.name} ${(strength * 100).roundToInt()}%" else look.name)
+        }
         if (parts.isEmpty()) parts.add("Raw")
         val label = parts.joinToString(" + ")
         val fileLabel = parts.joinToString("_") { LutNames.slug(it) }
-        val key = "${inputKey ?: "raw"}|$lookKey"
-        val baseKey = "${inputKey ?: "raw"}|original"
         val request = ++requestId
 
-        if (inputKey == null && look is LookItem.Original) {
+        if (inputKey == null && stack.isEmpty()) {
             onReady(null, null, label, fileLabel)
             return
         }
-
-        // Strength blends the profile on its own (base) with the profile plus the full look.
-        fun deliver(full: FloatCube, base: FloatCube) {
-            if (strength >= 0.999f) {
-                val packed = composedCache.getOrPut(key) { CubeParser.pack(full) }
-                onReady(packed, full, label, fileLabel)
-            } else {
-                val mixed = LutMath.mix(base, full, strength)
-                onReady(CubeParser.pack(mixed), mixed, label, fileLabel)
+        val key = (listOf(inputKey ?: "raw") + stack.map { (look, st) ->
+            val id = when (look) {
+                is LookItem.Asset -> look.path
+                is LookItem.External -> "external-${look.id}"
+                else -> look.name
             }
-        }
-
-        val cachedFull = composedFloatCache[key]
-        val cachedBase = composedFloatCache[baseKey]
-        if (cachedFull != null && cachedBase != null) {
-            deliver(cachedFull, cachedBase)
+            "$id@${(st * 100).roundToInt()}"
+        }).joinToString("|")
+        bakedCache[key]?.let { (packed, baked) ->
+            onReady(packed, baked, label, fileLabel)
             return
         }
         io.execute {
+            // Dragging a strength slider queues many requests. Only the newest is worth baking.
+            if (request != requestId) return@execute
             try {
                 val first = when {
                     inputKey == null -> null
                     input.isLoaded -> input.cube
                     else -> loadAsset(input.path!!)
                 }
-                val second = when (look) {
-                    is LookItem.Original -> null
-                    is LookItem.Asset -> loadAsset(look.path)
-                    is LookItem.External -> look.cube
-                    is LookItem.Diag -> null
-                }
-                val full = cachedFull ?: LutMath.compose(first, second, 33)
-                val base = cachedBase ?: LutMath.compose(first, null, 33)
+                val baked = LutMath.bake(first, stack.map { (look, st) -> layerCube(look) to st }, 33)
+                val packed = CubeParser.pack(baked)
                 main.post {
-                    composedFloatCache[key] = full
-                    composedFloatCache[baseKey] = base
-                    if (request == requestId) deliver(full, base)
+                    bakedCache[key] = packed to baked
+                    if (request == requestId) onReady(packed, baked, label, fileLabel)
                 }
             } catch (e: Exception) {
                 main.post { if (request == requestId) setStatus("LUT error ($label): ${e.message}") }
@@ -846,24 +916,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Strength for the selected look, remembered per look for this session.
-    private val strengths = HashMap<Int, Float>()
-
-    private fun lookStrength(): Float = strengths[selectedLook] ?: 1f
-
-    private fun updateStrengthRow() {
-        val look = looks[selectedLook]
-        val adjustable = look !is LookItem.Original && look !is LookItem.Diag
-        val pct = (lookStrength() * 100).roundToInt()
-        strengthSlider.value = pct.toFloat()
-        strengthSlider.isEnabled = adjustable
-        strengthValue.text = if (adjustable) "$pct%" else "–"
-    }
-
     // Choosing an input or a look applies it to the playing or paused video straight away.
     private fun applySelection() {
-        val look = looks[selectedLook]
-        if (look is LookItem.Diag) {
+        val look = diagLook()
+        if (look != null) {
             requestId++
             currentCube = null
             diagMode = look.kind
@@ -904,21 +960,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun noEffect(): Boolean {
         val input = inputs[selectedInput]
-        return looks[selectedLook] is LookItem.Original && (input.isRaw || input.isPassthrough)
-    }
-
-    private fun describeSelection(): String {
-        val input = inputs[selectedInput]
-        val look = looks[selectedLook]
-        if (noEffect()) {
-            return if (input.isRaw) "Raw footage, no transform" else "No effect (Rec.709 passthrough, no look)"
-        }
-        val inputText = when {
-            look is LookItem.External && look.full -> "skipped (full LUT)"
-            input.isSlog3 -> "${input.name} (expects S-Log3 footage)"
-            else -> input.name
-        }
-        return "Camera: $inputText + Look: ${look.name}"
+        return activeStack().isEmpty() && diagLook() == null && (input.isRaw || input.isPassthrough)
     }
 
     // An identity LUT stands in for "no effect" so the effects pipeline stays set up on the player.
@@ -1001,7 +1043,7 @@ class MainActivity : AppCompatActivity() {
                     // Loaded looks go before the DIAG items, which stay at the end of the list.
                     val at = looks.indexOfFirst { it is LookItem.Diag }.let { if (it < 0) looks.size else it }
                     looks.add(at, LookItem.External(name, cube, full, ++externalCount))
-                    if (selectedLook >= at) selectedLook++
+                    layers.forEach { if (it.look >= at) it.look++ }
                     categoryFilter = LookCategories.MY_LUTS
                     rebuildChips()
                     rebuildLooksRows()
@@ -1018,7 +1060,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun startExport() {
         val uri = videoUri ?: return
-        if (looks[selectedLook] is LookItem.Diag) return
+        if (diagLook() != null) return
         resolve { cube, floatCube, label, fileLabel ->
             if (cube != null && floatCube != null) runExport(uri, label, fileLabel, cube, floatCube)
         }
@@ -1190,7 +1232,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateExportEnabled() {
-        val ready = videoUri != null && !noEffect() && looks[selectedLook] !is LookItem.Diag
+        val ready = videoUri != null && !noEffect() && diagLook() == null
         exportButton.visibility = if (ready || transformer != null) View.VISIBLE else View.GONE
         exportButton.isEnabled = ready && transformer == null
     }
@@ -1219,6 +1261,7 @@ class MainActivity : AppCompatActivity() {
     private companion object {
         const val CHECK_LONG_SIDE = 160
         const val SPLASH_MIN_MS = 700L
+        const val MAX_LAYERS = 5
         const val THUMB_LONG_SIDE = 240
         const val SCAN_BYTES = 2 * 1024 * 1024
         const val FILTER_ALL = "\u0000all"

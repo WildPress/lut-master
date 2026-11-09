@@ -23,4 +23,10 @@
     <string name="not_detected">Couldn\'t detect the camera profile, so it\'s using %1$s.</string>
     <string name="help_text">Log footage looks flat and grey on purpose. The camera keeps as much detail as it can in the shadows and highlights, and leaves contrast and colour for later.\n\nRec.709 is the standard for normal HD video. It\'s what phones, TVs and YouTube expect, so log footage needs converting to it before it looks right.\n\nLUT Master does this in two steps.\n\n1. Camera profile. This converts the footage from your camera\'s log format to Rec.709. It has to match how the clip was shot, such as Samsung Log or Sony S-Log3. The app tries to detect it from the file.\n\n2. Look. This is the creative grade on top, like a film style or a cinematic teal and orange.\n\nIf a clip already looks normal, it isn\'t log. Set the camera profile to Rec709 Passthrough.\n\nPress and hold the video to see the original clip. Export saves a graded copy to Movies/LUT and leaves the original alone.</string>
     <string name="strength_label">Strength</string>
+    <string name="layers_hint">Layers: top applies last. Tap one, then pick a look.</string>
+    <string name="add_layer">Add layer</string>
+    <string name="remove_layer">Remove layer</string>
+    <string name="drag_layer">Drag to reorder</string>
+    <string name="empty_layer">Empty, pick a look below</string>
+    <string name="max_layers">Up to %1$d layers</string>
 </resources>

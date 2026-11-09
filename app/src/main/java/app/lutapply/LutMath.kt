@@ -90,6 +90,18 @@ object LutMath {
         return FloatCube(n, data)
     }
 
+    // Bakes the input transform plus a stack of layers into one n-point cube. Layers apply in list
+    // order (first = bottom), each blended with what's beneath it by its strength (0..1).
+    fun bake(input: FloatCube?, layers: List<Pair<FloatCube, Float>>, n: Int = 33): FloatCube {
+        var cube = compose(input, null, n)
+        for ((lut, strength) in layers) {
+            if (strength <= 0.001f) continue
+            val applied = compose(cube, lut, n)
+            cube = if (strength >= 0.999f) applied else mix(cube, applied, strength)
+        }
+        return cube
+    }
+
     // Blends two cubes of the same size: t = 0 gives a, t = 1 gives b. Used for look strength,
     // where a is the camera profile alone and b is the profile plus the full look.
     fun mix(a: FloatCube, b: FloatCube, t: Float): FloatCube {
