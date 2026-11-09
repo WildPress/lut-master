@@ -102,7 +102,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var chips: ChipGroup
     private lateinit var looksList: RecyclerView
     private lateinit var looksAdapter: LooksAdapter
-    private lateinit var placeholder: TextView
+    private lateinit var placeholder: View
     private lateinit var compareBadge: TextView
     private lateinit var backCallback: OnBackPressedCallback
     private var loadedInputCount = 0
@@ -130,6 +130,19 @@ class MainActivity : AppCompatActivity() {
     private var errorCount = 0
     private var effectsDisabled = false
     private val identityCube by lazy { CubeParser.pack(LutMath.compose(null, null, 17)) }
+
+    // The one LUT effect the preview uses. Changing looks updates its contents rather than the
+    // player's effect list, so the GPU pipeline isn't rebuilt on every tap.
+    private lateinit var liveLut: LiveColorLut
+    private var lutEffects: List<Effect> = emptyList()
+    private var lookCube: Array<Array<IntArray>>? = null
+
+    // A new pipeline gets a new LiveColorLut, so the old pipeline's release can't delete its texture.
+    private fun newLutEffects(): List<Effect> {
+        liveLut = LiveColorLut(if (comparing) identityCube else lookCube ?: identityCube)
+        lutEffects = listOf(liveLut)
+        return lutEffects
+    }
     private val composedFloatCache = HashMap<String, FloatCube>()
 
     private var advKeepColour = false
@@ -188,7 +201,7 @@ class MainActivity : AppCompatActivity() {
         player = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(this, extractors))
             .build()
-        currentEffects = effectList(null)
+        currentEffects = newLutEffects()
         player.setVideoEffects(currentEffects)
         effectsApplied++
         player.addListener(object : Player.Listener {
@@ -257,7 +270,7 @@ class MainActivity : AppCompatActivity() {
         applySelection()
         updateDebug()
 
-        findViewById<MaterialButton>(R.id.pickVideo).setOnClickListener { pickVideo.launch(arrayOf("video/*")) }
+        placeholder.setOnClickListener { pickVideo.launch(arrayOf("video/*")) }
         exportButton.setOnClickListener { startExport() }
         if (inputs.size == 1 && looks.size == 1) setStatus("No bundled LUTs found. Use the menu to load one.")
     }
@@ -274,6 +287,10 @@ class MainActivity : AppCompatActivity() {
         val toolbar = findViewById<MaterialToolbar>(R.id.toolbar)
         toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
+                R.id.menu_open -> {
+                    pickVideo.launch(arrayOf("video/*"))
+                    true
+                }
                 R.id.menu_help -> {
                     MaterialAlertDialogBuilder(this)
                         .setTitle(R.string.how_it_works)
@@ -312,6 +329,7 @@ class MainActivity : AppCompatActivity() {
         effectsDisabled = false
         placeholder.visibility = View.GONE
         // Media3 requires setVideoEffects at least once before prepare() to set up the effects pipeline.
+        if (currentEffects === lutEffects) currentEffects = newLutEffects()
         player.setVideoEffects(currentEffects)
         effectsApplied++
         player.setMediaItem(MediaItem.fromUri(uri))
@@ -332,9 +350,10 @@ class MainActivity : AppCompatActivity() {
         if (fullscreen == on) return
         fullscreen = on
         val vis = if (on) View.GONE else View.VISIBLE
-        for (id in intArrayOf(R.id.toolbar, R.id.profileRow, R.id.chipScroll, R.id.looksList, R.id.status, R.id.bottomBar)) {
+        for (id in intArrayOf(R.id.toolbar, R.id.profileRow, R.id.chipScroll, R.id.looksList)) {
             findViewById<View>(id).visibility = vis
         }
+        status.visibility = if (!on && statusShown) View.VISIBLE else View.GONE
         if (advDiag) debug.visibility = vis
         playerView.setFullscreenButtonState(on)
         backCallback.isEnabled = on
@@ -350,13 +369,22 @@ class MainActivity : AppCompatActivity() {
     private fun startCompare() {
         comparing = true
         compareBadge.visibility = View.VISIBLE
-        swapEffects(effectList(null))
+        if (currentEffects !== lutEffects) swapEffects(newLutEffects()) else { liveLut.set(identityCube); redrawIfPaused() }
     }
 
     private fun endCompare() {
         comparing = false
         compareBadge.visibility = View.GONE
-        swapEffects(currentEffects)
+        liveLut.set(lookCube ?: identityCube)
+        if (currentEffects !== lutEffects) swapEffects(currentEffects) else redrawIfPaused()
+    }
+
+    // A paused player only redraws on a new frame, so seek to the same position to push one through.
+    private fun redrawIfPaused() {
+        if (player.mediaItemCount == 0 || player.playbackState == Player.STATE_IDLE || player.isPlaying) return
+        val controlsShown = playerView.isControllerFullyVisible
+        player.seekTo(player.currentPosition)
+        if (!controlsShown) playerView.hideController()
     }
 
     private fun swapEffects(effects: List<Effect>) {
@@ -551,6 +579,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun selectLook(index: Int) {
+        if (comparing) endCompare()
         selectedLook = index
         looksAdapter.selectedIndex = index
         updateExportEnabled()
@@ -737,7 +766,6 @@ class MainActivity : AppCompatActivity() {
             return
         }
         composedCache[key]?.let { onReady(it, composedFloatCache[key], label, fileLabel); return }
-        setStatus("Preparing $label...")
         io.execute {
             try {
                 val first = when {
@@ -778,8 +806,8 @@ class MainActivity : AppCompatActivity() {
         diagMode = 0
         resolve { cube, _, _, _ ->
             currentCube = cube
-            applyEffects(effectList(cube))
-            setStatus(describeSelection())
+            applyLut(cube)
+            clearStatus()
         }
     }
 
@@ -826,8 +854,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     // An identity LUT stands in for "no effect" so the effects pipeline stays set up on the player.
-    private fun effectList(cube: Array<Array<IntArray>>?): List<Effect> =
-        listOf(SingleColorLut.createFromCube(cube ?: identityCube))
+    private fun applyLut(cube: Array<Array<IntArray>>?) {
+        lookCube = cube
+        if (!comparing) liveLut.set(cube ?: identityCube)
+        if (currentEffects !== lutEffects) {
+            // Coming back from a diagnostic effect: put the live LUT back in the pipeline.
+            applyEffects(newLutEffects())
+        } else {
+            updateDebug()
+            if (!effectsDisabled && !comparing) redrawIfPaused()
+        }
+    }
 
     private fun applyEffects(effects: List<Effect>) {
         currentEffects = effects
@@ -1085,11 +1122,24 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateExportEnabled() {
-        exportButton.isEnabled = videoUri != null && !noEffect() && transformer == null && looks[selectedLook] !is LookItem.Diag
+        val ready = videoUri != null && !noEffect() && looks[selectedLook] !is LookItem.Diag
+        exportButton.visibility = if (ready || transformer != null) View.VISIBLE else View.GONE
+        exportButton.isEnabled = ready && transformer == null
     }
+
+    // The status line only appears for errors, exports and diagnostics, so it doesn't change the
+    // video's height every time a look is picked.
+    private var statusShown = false
 
     private fun setStatus(s: String) {
         status.text = s
+        statusShown = true
+        if (!fullscreen) status.visibility = View.VISIBLE
+    }
+
+    private fun clearStatus() {
+        statusShown = false
+        status.visibility = View.GONE
     }
 
     private fun snackbarAnchor(): View = findViewById(android.R.id.content)

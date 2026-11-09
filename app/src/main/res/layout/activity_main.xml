@@ -15,7 +15,26 @@
         android:background="@color/surface_container"
         app:menu="@menu/overflow"
         app:title="@string/app_name"
-        app:titleTextColor="?colorOnSurface" />
+        app:titleTextColor="?colorOnSurface">
+
+        <!-- Only shown once there's a video and a look to export. -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/export"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:layout_gravity="end|center_vertical"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="16dp"
+            android:text="@string/export"
+            android:textColor="@color/export_button_fg"
+            android:visibility="gone"
+            app:backgroundTint="@color/export_button_bg"
+            app:icon="@android:drawable/ic_menu_save"
+            app:iconGravity="textStart"
+            app:iconTint="@color/export_button_fg" />
+    </com.google.android.material.appbar.MaterialToolbar>
 
     <app.lutapply.HoldToCompareLayout
         android:id="@+id/playerHolder"
@@ -56,16 +75,13 @@
             android:textStyle="bold"
             android:visibility="gone" />
 
-        <TextView
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/placeholder"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="center"
-            android:gravity="center"
-            android:padding="24dp"
-            android:text="@string/placeholder"
-            android:textColor="?colorOnSurfaceVariant"
-            android:textSize="15sp" />
+            android:text="@string/pick_video"
+            app:icon="@drawable/ic_folder_open" />
     </app.lutapply.HoldToCompareLayout>
 
     <LinearLayout
@@ -130,7 +146,8 @@
         android:paddingHorizontal="16dp"
         android:paddingVertical="6dp"
         android:textColor="?colorOnSurfaceVariant"
-        android:textSize="13sp" />
+        android:textSize="13sp"
+        android:visibility="gone" />
 
     <TextView
         android:id="@+id/debug"
@@ -150,37 +167,4 @@
         android:max="100"
         android:visibility="gone"
         app:trackCornerRadius="0dp" />
-
-    <LinearLayout
-        android:id="@+id/bottomBar"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:background="@color/surface_container"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingHorizontal="12dp"
-        android:paddingVertical="8dp">
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/pickVideo"
-            style="@style/Widget.Material3.Button.OutlinedButton"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="@string/pick_video" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/export"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:layout_weight="1"
-            android:enabled="false"
-            android:text="@string/export"
-            android:textColor="@color/export_button_fg"
-            app:backgroundTint="@color/export_button_bg"
-            app:icon="@android:drawable/ic_menu_save"
-            app:iconTint="@color/export_button_fg"
-            app:iconGravity="textStart" />
-    </LinearLayout>
 </LinearLayout>
