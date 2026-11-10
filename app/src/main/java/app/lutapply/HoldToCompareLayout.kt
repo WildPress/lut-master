@@ -13,6 +13,8 @@ import kotlin.math.abs
 // press doesn't also count as a tap, and every event until release belongs to the hold.
 // A sideways drag that starts along the bottom edge, while quickScrubEnabled says so, becomes a
 // quick scrub instead: children get a cancel and the drag position is reported as a fraction.
+// A plain tap goes to onTap instead of the children (so the player doesn't pop its controls up),
+// except a tap that starts on passThrough (the visible control bar), whose buttons need it.
 class HoldToCompareLayout(context: Context, attrs: AttributeSet?) : FrameLayout(context, attrs) {
     var onHoldStart: (() -> Boolean)? = null
     var onHoldEnd: (() -> Unit)? = null
@@ -25,10 +27,15 @@ class HoldToCompareLayout(context: Context, attrs: AttributeSet?) : FrameLayout(
     var onQuickScrubTo: ((Float) -> Unit)? = null
     var onQuickScrubEnd: (() -> Unit)? = null
 
+    // Returns true when it handled the tap.
+    var onTap: (() -> Boolean)? = null
+    var passThrough: View? = null
+
     private var holding = false
     private var excluded = false
     private var scrubCandidate = false
     private var scrubbing = false
+    private var tapCandidate = false
     private var downX = 0f
     private var downY = 0f
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
@@ -39,6 +46,7 @@ class HoldToCompareLayout(context: Context, attrs: AttributeSet?) : FrameLayout(
         override fun onLongPress(e: MotionEvent) {
             if (scrubbing || onHoldStart?.invoke() != true) return
             holding = true
+            tapCandidate = false
             cancelChildren(e)
         }
     })
@@ -51,7 +59,14 @@ class HoldToCompareLayout(context: Context, attrs: AttributeSet?) : FrameLayout(
                 scrubbing = false
                 scrubCandidate = ev.y >= height - scrubBand && quickScrubEnabled?.invoke() == true
                 excluded = scrubCandidate || startsOn(exclude, ev)
+                tapCandidate = onTap != null && !startsOn(exclude, ev) && !startsOn(passThrough, ev)
             }
+            MotionEvent.ACTION_MOVE -> if (tapCandidate &&
+                (abs(ev.x - downX) > touchSlop || abs(ev.y - downY) > touchSlop)) {
+                tapCandidate = false
+            }
+        }
+        when (ev.actionMasked) {
             MotionEvent.ACTION_MOVE -> if (scrubCandidate && !scrubbing) {
                 val dx = abs(ev.x - downX)
                 if (dx > touchSlop && dx > abs(ev.y - downY)) {
@@ -77,6 +92,13 @@ class HoldToCompareLayout(context: Context, attrs: AttributeSet?) : FrameLayout(
                 onHoldEnd?.invoke()
             }
             return true
+        }
+        if (ev.actionMasked == MotionEvent.ACTION_UP && tapCandidate) {
+            tapCandidate = false
+            if (onTap?.invoke() == true) {
+                cancelChildren(ev)
+                return true
+            }
         }
         return super.dispatchTouchEvent(ev)
     }

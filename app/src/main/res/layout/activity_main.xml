@@ -17,12 +17,19 @@
         app:title="@string/app_name"
         app:titleTextColor="?colorOnSurface">
 
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="end|center_vertical"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
         <!-- Only shown once there's a video and a look to export. -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/export"
             android:layout_width="wrap_content"
             android:layout_height="40dp"
-            android:layout_gravity="end|center_vertical"
+            android:layout_marginEnd="8dp"
             android:insetTop="0dp"
             android:insetBottom="0dp"
             android:minWidth="0dp"
@@ -34,6 +41,21 @@
             app:icon="@android:drawable/ic_menu_save"
             app:iconGravity="textStart"
             app:iconTint="@color/export_button_fg" />
+
+        <!-- Opening a video, spelled out: an icon alone wasn't clear enough. -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/openVideo"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="14dp"
+            android:text="@string/open_short"
+            app:icon="@drawable/ic_folder_open"
+            app:iconGravity="textStart" />
+        </LinearLayout>
     </com.google.android.material.appbar.MaterialToolbar>
 
     <app.lutapply.HoldToCompareLayout
@@ -41,7 +63,7 @@
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="3"
-        android:background="#000000">
+        android:background="@color/viewer_surround">
 
         <androidx.media3.ui.PlayerView
             android:id="@+id/player"
@@ -49,6 +71,7 @@
             android:layout_height="match_parent"
             app:auto_show="false"
             app:resize_mode="fit"
+            app:shutter_background_color="@color/viewer_surround"
             app:show_buffering="when_playing"
             app:show_fastforward_button="false"
             app:show_next_button="false"
@@ -75,13 +98,20 @@
             android:textStyle="bold"
             android:visibility="gone" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/placeholder"
+        <TextView
+            android:id="@+id/referenceBadge"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_gravity="center"
-            android:text="@string/pick_video"
-            app:icon="@drawable/ic_folder_open" />
+            android:layout_gravity="top|end"
+            android:layout_margin="12dp"
+            android:background="@drawable/badge_bg"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="3dp"
+            android:text="@string/reference_badge"
+            android:textColor="#FFFFFFFF"
+            android:textSize="11sp"
+            android:visibility="gone" />
+
         <!-- Status and export progress sit over the video so they never change its size. -->
         <com.google.android.material.progressindicator.LinearProgressIndicator
             android:id="@+id/progress"
@@ -163,7 +193,7 @@
                 android:id="@+id/layersList"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
+                android:layout_weight="3"
                 android:clipToPadding="false"
                 android:overScrollMode="never" />
 
@@ -171,23 +201,16 @@
                 android:id="@+id/strength"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
+                android:layout_weight="2"
                 android:contentDescription="@string/strength_label"
                 android:stepSize="5"
                 android:value="100"
                 android:valueFrom="0"
                 android:valueTo="100"
-                app:labelBehavior="gone"
-                app:tickVisible="false" />
-
-            <TextView
-                android:id="@+id/strengthValue"
-                android:layout_width="38dp"
-                android:layout_height="wrap_content"
-                android:gravity="end"
-                android:text="100%"
-                android:textColor="?colorOnSurface"
-                android:textSize="12sp" />
+                app:labelBehavior="floating"
+                app:thumbHeight="24dp"
+                app:tickVisible="false"
+                app:trackHeight="6dp" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/addLayer"
@@ -198,7 +221,7 @@
                 android:insetTop="0dp"
                 android:insetBottom="0dp"
                 app:icon="@drawable/ic_add"
-                app:iconTint="@color/cd_ginger" />
+                app:iconTint="?colorOnSurface" />
         </LinearLayout>
 
         <!-- The category bar floats over the top of the looks list, which is padded by the bar's

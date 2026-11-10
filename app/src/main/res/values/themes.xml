@@ -1,36 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Cat Daddy house theme: ink background, ginger accent, teal second colour. -->
+    <!-- Neutral grading-suite theme: every colour is a pure grey so nothing on screen tints how the
+         picture is seen. Selection shows as a lighter grey, never a hue. -->
     <style name="Theme.LutMaster" parent="Theme.Material3.Dark.NoActionBar">
-        <item name="colorPrimary">@color/cd_ginger</item>
-        <item name="colorOnPrimary">#FF2B1300</item>
-        <item name="colorPrimaryContainer">#FF6B3500</item>
-        <item name="colorOnPrimaryContainer">#FFFFDCC6</item>
-        <item name="colorSecondary">@color/cd_teal</item>
-        <item name="colorOnSecondary">#FF003738</item>
-        <item name="colorSecondaryContainer">#FF2C3A40</item>
-        <item name="colorOnSecondaryContainer">#FFCDEFF0</item>
-        <item name="colorTertiary">#FFE6C3A0</item>
-        <item name="colorOnTertiary">#FF3F2D17</item>
-        <item name="colorTertiaryContainer">#FF57432B</item>
-        <item name="colorOnTertiaryContainer">#FFFFDDBA</item>
-        <item name="colorError">#FFFFB4AB</item>
-        <item name="colorOnError">#FF690005</item>
-        <item name="colorSurface">@color/cd_ink</item>
-        <item name="colorOnSurface">#FFEAE3DA</item>
-        <item name="colorSurfaceVariant">#FF46424F</item>
-        <item name="colorOnSurfaceVariant">#FFCBC4D2</item>
-        <item name="colorOutline">#FF948F9C</item>
+        <item name="colorPrimary">@color/grey_selected</item>
+        <item name="colorOnPrimary">@color/grey_bg</item>
+        <item name="colorPrimaryContainer">@color/grey_raised</item>
+        <item name="colorOnPrimaryContainer">@color/grey_text_bright</item>
+        <item name="colorSecondary">#FFB0B0B0</item>
+        <item name="colorOnSecondary">@color/grey_bg</item>
+        <item name="colorSecondaryContainer">@color/grey_raised</item>
+        <item name="colorOnSecondaryContainer">@color/grey_text_bright</item>
+        <item name="colorTertiary">#FFB0B0B0</item>
+        <item name="colorOnTertiary">@color/grey_bg</item>
+        <item name="colorTertiaryContainer">@color/grey_raised</item>
+        <item name="colorOnTertiaryContainer">@color/grey_text_bright</item>
+        <!-- Errors are rare and need to be noticed, so they keep a muted red. -->
+        <item name="colorError">#FFE0A0A0</item>
+        <item name="colorOnError">#FF3A1010</item>
+        <item name="colorSurface">@color/grey_bg</item>
+        <item name="colorOnSurface">@color/grey_text</item>
+        <item name="colorSurfaceVariant">@color/grey_raised</item>
+        <item name="colorOnSurfaceVariant">#FFB0B0B0</item>
+        <item name="colorOutline">#FF6E6E6E</item>
+        <item name="colorOutlineVariant">#FF444444</item>
+        <item name="colorSurfaceContainerLowest">#FF141414</item>
+        <item name="colorSurfaceContainerLow">#FF202020</item>
         <item name="colorSurfaceContainer">@color/surface_container</item>
         <item name="colorSurfaceContainerHigh">@color/surface_container_high</item>
         <item name="colorSurfaceContainerHighest">@color/surface_container_highest</item>
-        <item name="android:colorBackground">@color/cd_ink</item>
+        <item name="colorSurfaceInverse">@color/grey_text</item>
+        <item name="colorOnSurfaceInverse">@color/grey_bg</item>
+        <item name="colorPrimaryInverse">#FF5A5A5A</item>
+        <item name="android:colorBackground">@color/grey_bg</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
 
     <!-- Splash screen: the app's cat on ink. Android 12+ adds the name and "by Cat Daddy"
-         underneath (values-v31). -->
+         underneath (values-v31). The brand colours stay here, outside the grading screen. -->
     <style name="Theme.LutMaster.Starting" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">@color/cd_ink</item>
         <item name="windowSplashScreenAnimatedIcon">@drawable/splash_icon</item>

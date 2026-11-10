@@ -15,7 +15,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginEnd="6dp"
-        android:textColor="@color/cd_ginger"
+        android:textColor="@color/on_surface_dim"
         android:textSize="12sp"
         android:textStyle="bold" />
 

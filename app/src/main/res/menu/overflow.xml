@@ -2,11 +2,6 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
     <item
-        android:id="@+id/menu_open"
-        android:icon="@drawable/ic_folder_open"
-        android:title="@string/pick_video"
-        app:showAsAction="always" />
-    <item
         android:id="@+id/menu_profile"
         android:title="@string/camera_profile" />
     <item

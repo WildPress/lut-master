@@ -2,6 +2,7 @@
 <resources>
     <string name="app_name">LUT Master</string>
     <string name="pick_video">Open video</string>
+    <string name="open_short">Open</string>
     <string name="export">Export</string>
     <string name="load_look_cube">Load look .cube</string>
     <string name="load_input_cube">Load .cube</string>
@@ -19,6 +20,12 @@
     <string name="categories_all_on">All on</string>
     <string name="looks_carousel">Looks in rows (one row per category)</string>
     <string name="hide_chips_on_scroll">Hide categories while scrolling</string>
+    <string name="reference_badge">Sample image · S-Log3</string>
+    <string name="exporting">Exporting…</string>
+    <string name="export_saved">Saved to Movies/LUT</string>
+    <string name="export_failed">Export failed. Try again.</string>
+    <string name="export_save_failed">Couldn\'t save the export.</string>
+    <string name="export_unchanged">The export came out without the look. Try exporting again.</string>
     <string name="original_badge">ORIGINAL</string>
     <string name="placeholder">Tap Open video to start</string>
     <string name="chip_all">All</string>

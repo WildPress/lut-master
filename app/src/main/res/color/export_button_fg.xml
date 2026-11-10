@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Near-black text on the green, light grey on the disabled grey, both well above 4.5:1 contrast. -->
+<!-- Near-black on the light grey, mid grey on the disabled dark grey. -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:color="#FFB5B8C0" android:state_enabled="false" />
-    <item android:color="#FF0B2010" />
+    <item android:color="#FF8A8A8A" android:state_enabled="false" />
+    <item android:color="@color/grey_bg" />
 </selector>
