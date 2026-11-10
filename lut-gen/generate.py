@@ -427,7 +427,175 @@ def look(x, mix=None, bleach=0.0, keep=None, tone=None, shadows=None, **kw):
     return np.clip(x, 0, 1)
 
 
+def xpro(x, black, white, gamma=(1, 1, 1), g=1.2, sat=1.15, hue=None):
+    """Cross processing: each channel gets its own curve and its own black and white point, so the
+    blacks and the whites take on different, opposing colours (the film-in-the-wrong-chemistry look).
+    black/white are the RGB the darkest and brightest tones land on."""
+    x = grade(x, g=g, sat=sat, hue=hue)
+    x = np.power(np.clip(x, 0, 1), np.array(gamma))
+    b = np.array(black)
+    w = np.array(white)
+    return np.clip(b + (w - b) * x, 0, 1)
+
+
+def solarize(x, threshold=0.5, strength=1.0):
+    """Sabattier effect: tones above the threshold fold back down, per channel."""
+    folded = np.where(x > threshold, threshold - (x - threshold) * threshold / (1 - threshold), x)
+    return x + (folded / max(threshold, 1e-6) - x) * strength
+
+
+def posterize(x, levels):
+    """Hard steps per channel. The 33-point LUT softens each step slightly."""
+    return np.round(np.clip(x, 0, 1) * (levels - 1)) / (levels - 1)
+
+
+def gradient_map(t, stops):
+    """Maps 0..1 onto a colour ramp given as [(pos, (r, g, b)), ...]."""
+    pos = np.array([p for p, _ in stops])
+    cols = np.array([c for _, c in stops], dtype=float)
+    out = np.stack([np.interp(t, pos, cols[:, i]) for i in range(3)], -1)
+    return np.clip(out, 0, 1)
+
+
+def hue_warp(x, amount, waves=3.0, sat=1.2, phase=0.0):
+    """Rotates hue by an amount that itself swings with hue and brightness, so neighbouring
+    colours land far apart: a scrambled, glitchy palette that stays smooth enough for a LUT."""
+    hsv = rgb2hsv(np.clip(x, 0, 1))
+    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    shift = amount * np.sin(np.radians(h * waves) + v * 6.0 + phase)
+    s = np.clip(s * sat, 0, 1)
+    return hsv2rgb(np.stack([(h + shift) % 360.0, s, v], -1))
+
+
+def thermal(x, stops, contrast=1.25):
+    """Heat-camera false colour: brightness stands in for temperature and is mapped onto a palette.
+    A gentle S-curve on brightness first spreads the mid-tones across more of the palette."""
+    t = scurve(luma(np.clip(x, 0, 1)), PIVOT, contrast)
+    return gradient_map(t, stops)
+
+
+THERMAL_PALETTES = {
+    "ironbow": ("Ironbow (classic heat camera: black, purple, magenta, orange, yellow, white)", [
+        (0.0, (0.02, 0.0, 0.12)), (0.25, (0.35, 0.0, 0.6)), (0.45, (0.85, 0.05, 0.35)),
+        (0.65, (1.0, 0.5, 0.0)), (0.85, (1.0, 0.9, 0.1)), (1.0, (1.0, 1.0, 0.9))]),
+    "rainbow": ("Rainbow (high-contrast scientific palette, blue cold to red hot)", [
+        (0.0, (0.0, 0.0, 0.25)), (0.18, (0.0, 0.2, 1.0)), (0.36, (0.0, 0.9, 1.0)), (0.52, (0.1, 1.0, 0.2)),
+        (0.68, (1.0, 1.0, 0.0)), (0.84, (1.0, 0.25, 0.0)), (1.0, (1.0, 1.0, 1.0))]),
+    "white-hot": ("White hot (greyscale, hot is white, cold is black)", [
+        (0.0, (0.0, 0.0, 0.0)), (1.0, (1.0, 1.0, 1.0))]),
+    "black-hot": ("Black hot (greyscale, hot is black, cold is white)", [
+        (0.0, (1.0, 1.0, 1.0)), (1.0, (0.0, 0.0, 0.0))]),
+    "lava": ("Lava (black through deep red and orange to yellow)", [
+        (0.0, (0.0, 0.0, 0.0)), (0.3, (0.45, 0.0, 0.0)), (0.55, (0.9, 0.15, 0.0)),
+        (0.8, (1.0, 0.6, 0.0)), (1.0, (1.0, 1.0, 0.55))]),
+    "arctic": ("Arctic (black through navy and blue to icy cyan and white)", [
+        (0.0, (0.0, 0.0, 0.03)), (0.3, (0.0, 0.08, 0.4)), (0.55, (0.0, 0.4, 0.85)),
+        (0.8, (0.3, 0.85, 1.0)), (1.0, (0.95, 1.0, 1.0))]),
+    "night-vision": ("Night vision (phosphor green image intensifier)", [
+        (0.0, (0.0, 0.02, 0.0)), (0.5, (0.1, 0.6, 0.1)), (0.85, (0.55, 1.0, 0.45)), (1.0, (0.9, 1.0, 0.85))]),
+    "medical": ("Medical (blue, green, yellow, red, as on a temperature scan)", [
+        (0.0, (0.0, 0.0, 0.35)), (0.25, (0.0, 0.35, 1.0)), (0.5, (0.0, 0.85, 0.3)),
+        (0.75, (1.0, 0.9, 0.0)), (1.0, (0.9, 0.0, 0.0))]),
+}
+
+
+def underwater(x, red_from=(0.0, 0.0), gain=(1, 1, 1), g=1.15, sat=1.15, crush=0.0, hue=None,
+               lift=(0, 0, 0)):
+    """Water absorbs red first, then orange, so subjects go blue or green with depth. Rebuild red
+    from the green (and a little blue) channel that survives, rebalance the cast with per-channel
+    gain, then add contrast to cut the haze. A fixed correction: pick the depth/water that fits."""
+    x = np.clip(x, 0, 1)
+    rg, rb = red_from
+    r = x[..., 0] + rg * x[..., 1] + rb * x[..., 2]
+    x = np.stack([r, x[..., 1], x[..., 2]], -1) * np.array(gain)
+    return grade(np.clip(x, 0, 1), g=g, sat=sat, crush=crush, hue=hue, lift=lift)
+
+
 CATEGORY_LOOKS = {
+    "cross-processing": {
+        "slide-in-c41": dict(
+            title="Slide in C-41 (cyan-blue blacks, yellow-lime highlights, punchy)",
+            fn=lambda x: xpro(x, black=(0.0, 0.1, 0.3), white=(0.95, 1.0, 0.55), gamma=(0.85, 0.75, 1.5),
+                              g=1.35, sat=1.3)),
+        "negative-in-e6": dict(
+            title="Negative in E-6 (magenta blacks, pale cyan highlights, faded)",
+            fn=lambda x: xpro(x, black=(0.28, 0.0, 0.2), white=(0.7, 1.0, 0.95), gamma=(1.3, 0.85, 0.9),
+                              g=1.15, sat=1.15)),
+        "teal-and-peach": dict(
+            title="Teal and peach (deep teal blacks, warm peach whites)",
+            fn=lambda x: xpro(x, black=(0.0, 0.2, 0.22), white=(1.0, 0.82, 0.65), gamma=(0.88, 1.0, 1.2),
+                              g=1.25, sat=1.15)),
+        "violet-and-gold": dict(
+            title="Violet and gold (purple blacks, golden highlights)",
+            fn=lambda x: xpro(x, black=(0.22, 0.0, 0.32), white=(1.0, 0.88, 0.45), gamma=(0.9, 1.05, 1.25),
+                              g=1.3, sat=1.25)),
+        "red-and-cyan": dict(
+            title="Red and cyan (crimson blacks, icy cyan whites, clashing)",
+            fn=lambda x: xpro(x, black=(0.32, 0.0, 0.05), white=(0.68, 1.0, 1.0), gamma=(1.35, 0.9, 0.88),
+                              g=1.3, sat=1.25)),
+        "green-and-pink": dict(
+            title="Green and pink (bottle-green blacks, candy-pink highlights)",
+            fn=lambda x: xpro(x, black=(0.0, 0.26, 0.08), white=(1.0, 0.7, 0.85), gamma=(0.85, 1.2, 1.0),
+                              g=1.25, sat=1.2)),
+        "acid-wash": dict(
+            title="Acid wash (blue blacks, green mids, orange highs, very saturated)",
+            fn=lambda x: xpro(x, black=(0.0, 0.05, 0.38), white=(1.0, 0.78, 0.3), gamma=(1.35, 0.7, 1.6),
+                              g=1.4, sat=1.5)),
+    },
+    "glitch": {
+        "channel-swap": dict(
+            title="Channel swap (red, green and blue trade places)",
+            fn=lambda x: look(x, mix=[(0, 0, 1), (1, 0, 0), (0, 1, 0)], g=1.15, sat=1.2)),
+        "solarize": dict(
+            title="Solarize (bright tones fold back into dark, Sabattier effect)",
+            fn=lambda x: grade(solarize(grade(x, g=1.1, sat=1.2), 0.55), g=1.25, sat=1.3)),
+        "posterize": dict(
+            title="Posterize (flat colour bands, screen-print look)",
+            fn=lambda x: posterize(grade(x, g=1.2, sat=1.4), 4)),
+        "hue-scramble": dict(
+            title="Hue scramble (colours thrown to random-looking neighbours)",
+            fn=lambda x: grade(hue_warp(x, 150, waves=3, sat=1.35), g=1.15)),
+        "psychedelic": dict(
+            title="Psychedelic (rainbow bands follow brightness, saturated)",
+            fn=lambda x: np.clip(hsv2rgb(np.stack([
+                (luma(np.clip(x, 0, 1)) * 360.0 + rgb2hsv(np.clip(x, 0, 1))[..., 0] * 0.3) % 360.0,
+                np.full(x.shape[:-1], 0.85),
+                np.clip(0.25 + 0.85 * luma(np.clip(x, 0, 1)), 0, 1)], -1)), 0, 1)),
+        "negative": dict(
+            title="Negative (inverted tones and colours, cool cast)",
+            fn=lambda x: grade(1.0 - np.clip(x, 0, 1), g=1.1, sat=1.1, gain=(0.92, 1.0, 1.05))),
+        "broken-signal": dict(
+            title="Broken signal (posterised, clipped channels, green-magenta fringe)",
+            fn=lambda x: posterize(look(x, mix=[(1.5, -0.6, 0.2), (-0.4, 1.6, -0.3), (0.5, -0.5, 1.1)],
+                                        g=1.5, sat=1.8, sh=(0.12, -0.08, 0.14), hi=(-0.1, 0.12, -0.08)), 5)),
+    },
+    "thermal": {
+        _k: dict(title=_t, fn=(lambda st: (lambda x: thermal(x, st)))(_s))
+        for _k, (_t, _s) in THERMAL_PALETTES.items()
+    },
+    "underwater": {
+        "shallow-reef": dict(
+            title="Shallow reef (0-5 m: warms skin and sand back up, clear blue water)",
+            fn=lambda x: underwater(x, red_from=(0.18, 0.0), gain=(1.12, 1.0, 0.92), g=1.15, sat=1.12,
+                                    hue=[(25, 25, 1.2, 0, 1.0)])),
+        "deep-blue": dict(
+            title="Deep blue (10-20 m: rebuilds red from green, cuts the strong blue cast)",
+            fn=lambda x: underwater(x, red_from=(0.45, 0.1), gain=(1.2, 0.95, 0.78), g=1.22, sat=1.18,
+                                    crush=0.015, hue=[(25, 30, 1.3, 0, 1.0), (200, 40, 0.9, 0, 1.0)])),
+        "green-water": dict(
+            title="Green water (lakes and temperate seas: removes green cast, adds magenta)",
+            fn=lambda x: underwater(x, red_from=(0.35, 0.1), gain=(1.15, 0.86, 1.0), g=1.2, sat=1.15,
+                                    crush=0.01, hue=[(100, 40, 0.8, 30, 1.0), (25, 30, 1.25, 0, 1.0)])),
+        "vivid-coral": dict(
+            title="Vivid coral (restored reds and oranges, extra punch for reef colour)",
+            fn=lambda x: underwater(x, red_from=(0.5, 0.1), gain=(1.2, 0.95, 0.8), g=1.3, sat=1.35,
+                                    crush=0.02, hue=[(10, 30, 1.4, 0, 1.0), (40, 25, 1.3, 0, 1.0),
+                                                     (300, 35, 1.25, 0, 1.0)])),
+        "open-blue": dict(
+            title="Open blue (keeps the blue, deepens it and cuts the haze)",
+            fn=lambda x: underwater(x, red_from=(0.12, 0.0), gain=(1.05, 1.0, 1.0), g=1.35, sat=1.25,
+                                    crush=0.025, hue=[(205, 40, 1.25, 5, 0.95)])),
+    },
     "cinematic": {
         "teal-and-orange": dict(
             title="Teal and orange (warm skin, teal shadows and blues)",

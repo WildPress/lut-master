@@ -14,3 +14,4 @@ app/src/main/assets/luts/input/samsung-log-to-rec709.cube
 # Regenerate with: docker build -t lut-master-ffmpeg -f Dockerfile.ffmpeg .
 test-assets/*.mp4
 .signing/
+__pycache__/
