@@ -15,3 +15,5 @@ app/src/main/assets/luts/input/samsung-log-to-rec709.cube
 test-assets/*.mp4
 .signing/
 __pycache__/
+lut-gen/out/*.mp4
+lut-gen/out/reference-slog3.png

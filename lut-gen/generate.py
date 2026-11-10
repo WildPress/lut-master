@@ -511,7 +511,140 @@ def underwater(x, red_from=(0.0, 0.0), gain=(1, 1, 1), g=1.15, sat=1.15, crush=0
     return grade(np.clip(x, 0, 1), g=g, sat=sat, crush=crush, hue=hue, lift=lift)
 
 
+def pastel(x, black, white, g=0.9, sat=0.9, hue=None, gamma=(1, 1, 1), glow=0.0, knee=0.72,
+           sh=(0, 0, 0), hi=(0, 0, 0), bright=0.8):
+    """Soft pastel / kawaii: low contrast, then the tonal range is squeezed between a coloured
+    black (never true black) and a coloured white, so shadows turn lavender or rose instead of
+    grey. bright < 1 lifts the mid-tones (pastels are light colours); a soft shoulder plus a
+    little glow blooms the highlights."""
+    x = grade(x, g=g, sat=sat, hue=hue, gamma=gamma, sh=sh, hi=hi)
+    if glow:
+        y = luma(x)[..., None]
+        x = x + glow * smoothstep(0.45, 1.0, y) * (1 - x)
+    x = shoulder(np.power(np.clip(x, 0, 1), bright), knee)
+    b = np.array(black)
+    w = np.array(white)
+    return np.clip(b + (w - b) * x, 0, 1)
+
+
+VELVIA_HUE = [(0, 25, 1.2, 0, 1.0), (120, 40, 1.2, 0, 1.0), (225, 35, 1.15, 0, 1.0), (300, 30, 1.1, -8, 1.0)]
+
+
+def atmos(x, black, glow=0.0, knee=0.8, glow_tint=(1, 1, 1), **kw):
+    """A saturated slide-film grade with atmosphere: the blacks are lifted onto a coloured floor
+    (so shadows read as air and depth rather than ink), highlights roll off softly and a little
+    tinted glow blooms the brights. Saturation stays high so the colour still pops."""
+    x = grade(x, **kw)
+    if glow:
+        y = luma(x)[..., None]
+        x = x + glow * smoothstep(0.5, 1.0, y) * (np.array(glow_tint) - x)
+    x = shoulder(np.clip(x, 0, 1), knee)
+    b = np.array(black)
+    return np.clip(b + (1 - b) * x, 0, 1)
+
+
 CATEGORY_LOOKS = {
+    "slide-film": {
+        "velvia-punch": dict(
+            title="Velvia punch (Velvia 50 style pushed further: denser colour, deeper blues)",
+            fn=lambda x: grade(x, g=1.36, sat=1.6, crush=0.02,
+                               hue=[(0, 25, 1.25, 0, 1.0), (120, 40, 1.3, 0, 1.0), (215, 35, 1.3, 5, 0.95),
+                                    (300, 30, 1.15, -8, 1.0), (45, 25, 1.15, 0, 1.0)])),
+        "golden-slide": dict(
+            title="Golden slide (saturated slide colour with warm golden-hour highlights)",
+            fn=lambda x: grade(x, g=1.3, sat=1.45, crush=0.015, gain=(1.04, 1.0, 0.92),
+                               hi=(0.03, 0.012, -0.03),
+                               hue=[(30, 30, 1.3, 0, 1.0), (50, 25, 1.25, -5, 1.0), (120, 40, 1.15, -6, 1.0),
+                                    (225, 35, 1.1, 0, 1.0)])),
+        "emerald-slide": dict(
+            title="Emerald slide (lush deep greens and cyan skies)",
+            fn=lambda x: grade(x, g=1.32, sat=1.45, crush=0.015, gain=(0.98, 1.02, 1.0),
+                               hue=[(110, 40, 1.45, 10, 0.95), (75, 25, 1.3, 20, 1.0), (200, 35, 1.35, -8, 1.0),
+                                    (0, 25, 1.1, 0, 1.0)])),
+        "crimson-slide": dict(
+            title="Crimson slide (rich reds and magentas, made for sunsets and flowers)",
+            fn=lambda x: grade(x, g=1.34, sat=1.5, crush=0.018, gain=(1.03, 0.98, 0.98),
+                               hue=[(355, 30, 1.45, 0, 0.97), (25, 25, 1.3, -6, 1.0), (310, 35, 1.35, 0, 1.0),
+                                    (225, 35, 1.1, 0, 1.0)])),
+        "cobalt-slide": dict(
+            title="Cobalt slide (cool and crisp, intense blue skies and water)",
+            fn=lambda x: grade(x, g=1.3, sat=1.45, crush=0.015, gain=(0.97, 1.0, 1.04),
+                               hue=[(215, 35, 1.45, 5, 0.93), (185, 30, 1.3, 10, 1.0), (120, 40, 1.15, 10, 1.0),
+                                    (25, 22, 1.05, 0, 1.0)])),
+    },
+    "atmospheric": {
+        "faded-velvia": dict(
+            title="Faded Velvia (Velvia 50 style colour, softly lifted blacks)",
+            fn=lambda x: atmos(x, black=(0.087, 0.087, 0.094), g=1.25, sat=1.45, hue=VELVIA_HUE, knee=0.82)),
+        "misty-blue": dict(
+            title="Misty blue (saturated colour, blue-grey lifted shadows, cool haze)",
+            fn=lambda x: atmos(x, black=(0.087, 0.116, 0.160), glow=0.08, glow_tint=(0.85, 0.92, 1.0),
+                               g=1.22, sat=1.4, hue=VELVIA_HUE, sh=(-0.01, 0.0, 0.02), knee=0.78)),
+        "golden-haze": dict(
+            title="Golden haze (warm amber shadows and a glowing, sunlit haze)",
+            fn=lambda x: atmos(x, black=(0.160, 0.109, 0.058), glow=0.12, glow_tint=(1.0, 0.88, 0.65),
+                               g=1.22, sat=1.4, gain=(1.03, 1.0, 0.94), knee=0.76,
+                               hue=[(30, 30, 1.3, 0, 1.0), (120, 40, 1.15, -6, 1.0), (225, 35, 1.1, 0, 1.0)])),
+        "teal-atmosphere": dict(
+            title="Teal atmosphere (teal lifted shadows, warm saturated highlights)",
+            fn=lambda x: atmos(x, black=(0.043, 0.123, 0.131), glow=0.06, glow_tint=(1.0, 0.92, 0.8),
+                               g=1.25, sat=1.42, hi=(0.025, 0.008, -0.02), knee=0.8,
+                               hue=[(200, 35, 1.3, -10, 1.0), (25, 25, 1.2, 0, 1.0), (120, 40, 1.2, 15, 1.0)])),
+        "violet-dusk": dict(
+            title="Violet dusk (purple lifted shadows, rosy glow, deep saturated colour)",
+            fn=lambda x: atmos(x, black=(0.131, 0.072, 0.160), glow=0.1, glow_tint=(1.0, 0.82, 0.88),
+                               g=1.24, sat=1.4, knee=0.78, sh=(0.01, -0.01, 0.02),
+                               hue=[(300, 35, 1.35, 0, 1.0), (355, 30, 1.25, 0, 1.0), (225, 35, 1.2, 10, 1.0)])),
+        "forest-mist": dict(
+            title="Forest mist (deep greens, green-teal lifted shadows, pale soft haze)",
+            fn=lambda x: atmos(x, black=(0.072, 0.131, 0.109), glow=0.1, glow_tint=(0.9, 0.97, 0.93),
+                               g=1.22, sat=1.4, knee=0.76,
+                               hue=[(110, 40, 1.4, 8, 0.95), (75, 25, 1.3, 16, 1.0), (200, 35, 1.15, 0, 1.0)])),
+    },
+    "kawaii": {
+        "sakura": dict(
+            title="Sakura (cherry-blossom pinks, rose shadows, soft bright whites)",
+            fn=lambda x: pastel(x, black=(0.29, 0.22, 0.26), white=(1.0, 0.97, 0.98), g=0.88, sat=0.95,
+                                glow=0.12, hue=[(340, 35, 1.5, 0, 1.03), (10, 25, 1.2, -10, 1.0),
+                                                (110, 45, 0.55, 40, 1.05)])),
+        "cotton-candy": dict(
+            title="Cotton candy (pink highlights, baby-blue shadows, airy and pale)",
+            fn=lambda x: pastel(x, black=(0.25, 0.26, 0.36), white=(1.0, 0.95, 0.98), g=0.85, sat=1.0,
+                                glow=0.15, sh=(-0.02, 0.0, 0.04), hi=(0.03, -0.01, 0.01),
+                                hue=[(330, 40, 1.4, 0, 1.0), (210, 40, 1.2, -10, 1.03)])),
+        "strawberry-milk": dict(
+            title="Strawberry milk (creamy pink all over, gentle and warm)",
+            fn=lambda x: pastel(x, black=(0.33, 0.25, 0.26), white=(1.0, 0.96, 0.94), g=0.86, sat=0.95,
+                                glow=0.1, gamma=(0.96, 1.0, 1.0), hi=(0.02, -0.01, 0.0),
+                                hue=[(350, 40, 1.3, 0, 1.0), (110, 45, 0.6, 30, 1.0)])),
+        "milk-tea": dict(
+            title="Milk tea (beige and cream, cosy and muted)",
+            fn=lambda x: pastel(x, black=(0.32, 0.27, 0.25), white=(1.0, 0.97, 0.90), g=0.86, sat=1.0,
+                                glow=0.08, gamma=(0.97, 1.0, 1.05),
+                                hue=[(30, 30, 1.15, 0, 1.0), (210, 40, 0.65, 0, 1.0)])),
+        "mint-soda": dict(
+            title="Mint soda (mint greens and aqua, peach skin, fresh and clean)",
+            fn=lambda x: pastel(x, black=(0.22, 0.29, 0.29), white=(0.97, 1.0, 0.97), g=0.9, sat=0.95,
+                                glow=0.1, sh=(-0.01, 0.015, 0.01),
+                                hue=[(100, 45, 1.2, 35, 1.05), (190, 35, 1.25, 0, 1.03),
+                                     (25, 25, 1.05, 5, 1.02)])),
+        "lavender-dream": dict(
+            title="Lavender dream (lilac shadows, rosy highlights, hazy glow)",
+            fn=lambda x: pastel(x, black=(0.29, 0.25, 0.36), white=(1.0, 0.96, 1.0), g=0.84, sat=1.0,
+                                glow=0.18, knee=0.68, sh=(0.0, -0.01, 0.03),
+                                hue=[(260, 40, 1.4, 0, 1.03), (320, 35, 1.25, 0, 1.0), (110, 45, 0.6, 50, 1.0)])),
+        "peach-blossom": dict(
+            title="Peach blossom (peachy warmth, coral pinks, golden glow)",
+            fn=lambda x: pastel(x, black=(0.32, 0.25, 0.23), white=(1.0, 0.97, 0.92), g=0.9, sat=0.95,
+                                glow=0.12, hi=(0.02, 0.005, -0.01),
+                                hue=[(20, 30, 1.3, 0, 1.03), (350, 30, 1.25, 0, 1.0), (210, 40, 0.75, 0, 1.0)])),
+        "anime-sky": dict(
+            title="Anime sky (clear cyan skies, bright clean whites, fluffy highlights)",
+            fn=lambda x: pastel(x, black=(0.19, 0.20, 0.27), white=(1.0, 1.0, 1.0), g=1.0, sat=1.15,
+                                glow=0.1, knee=0.75, sh=(-0.01, 0.0, 0.03),
+                                hue=[(210, 35, 1.5, -12, 1.05), (110, 40, 1.15, 15, 1.03),
+                                     (25, 25, 1.0, 0, 1.03)])),
+    },
     "cross-processing": {
         "slide-in-c41": dict(
             title="Slide in C-41 (cyan-blue blacks, yellow-lime highlights, punchy)",
