@@ -17,6 +17,18 @@ android {
         versionName = "0.13.2"
     }
 
+    // Debug builds use the project's own key when it's present (git-ignored), so builds from Docker
+    // and from Android Studio on any machine sign the same way and install over each other.
+    val projectKey = rootProject.file(".signing/debug.keystore")
+    if (projectKey.exists()) {
+        signingConfigs.getByName("debug") {
+            storeFile = projectKey
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
