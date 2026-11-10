@@ -13,7 +13,8 @@ object LookCategories {
 
     private val order = listOf(
         "Cinematic", "Film", "Vivid", "Beauty", "Moody", "Gritty", "Horror", "Cyberpunk", "Quirky",
-        "Vintage", "Black & White", "Tinted Blacks", "Foggy Forest",
+        "Vintage", "Cross Processing", "Black & White", "Tinted Blacks", "Foggy Forest", "Underwater",
+        "Glitch", "Thermal",
     )
 
     fun categorise(fileName: String): String =

@@ -16,6 +16,17 @@
         android:id="@+id/menu_load_look"
         android:title="@string/load_look_cube" />
     <item
+        android:id="@+id/menu_categories"
+        android:title="@string/categories_menu" />
+    <item
+        android:id="@+id/menu_carousel"
+        android:checkable="true"
+        android:title="@string/looks_carousel" />
+    <item
+        android:id="@+id/menu_hide_chips"
+        android:checkable="true"
+        android:title="@string/hide_chips_on_scroll" />
+    <item
         android:id="@+id/menu_full_lut"
         android:checkable="true"
         android:title="@string/full_lut_skip_input" />

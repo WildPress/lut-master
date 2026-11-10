@@ -6,6 +6,7 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.os.SystemClock
 import android.os.Environment
 import android.os.Handler
@@ -47,6 +48,7 @@ import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import androidx.media3.ui.PlayerView
+import androidx.media3.common.C
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -146,6 +148,8 @@ class MainActivity : AppCompatActivity() {
     private var firstFrame = false
     private var errorCount = 0
     private var effectsDisabled = false
+    private var effectsOffAt = 0L
+    private var effectsError: String? = null
     private val identityCube by lazy { CubeParser.pack(LutMath.compose(null, null, 17)) }
 
     // The one LUT effect the preview uses. Changing looks updates its contents rather than the
@@ -175,6 +179,12 @@ class MainActivity : AppCompatActivity() {
     private var profileUndetected = false
     private var profileDetected = false
     private var categoryFilter = FILTER_ALL
+    // Settings (overflow menu): looks as one sideways row per category, and hiding the category
+    // bar while the looks are scrolled.
+    private var carouselLayout = false
+    private var hideChipsOnScroll = true
+    // Categories switched off in settings: left out of the category bar and the "All" list.
+    private val hiddenCategories = HashSet<String>()
     private val favourites = HashSet<String>()
 
     private var thumbFrame: Bitmap? = null
@@ -223,6 +233,9 @@ class MainActivity : AppCompatActivity() {
         advDiag = prefs.getBoolean("adv_diag", false)
         favourites.addAll(prefs.getStringSet("favourites", emptySet()) ?: emptySet())
         categoryFilter = prefs.getString("filter", FILTER_ALL) ?: FILTER_ALL
+        carouselLayout = prefs.getBoolean("looks_carousel", false)
+        hideChipsOnScroll = prefs.getBoolean("hide_chips_on_scroll", true)
+        hiddenCategories.addAll(prefs.getStringSet("hidden_categories", emptySet()) ?: emptySet())
         debug.visibility = if (advDiag) View.VISIBLE else View.GONE
 
         setupToolbar()
@@ -262,15 +275,19 @@ class MainActivity : AppCompatActivity() {
                 errorCount++
                 val cause = error.cause?.let { " / ${it.javaClass.simpleName}: ${it.message}" } ?: ""
                 val msg = "${error.errorCodeName}: ${error.message}$cause"
+                Log.e(TAG, "Playback error (effects ${if (effectsDisabled) "off" else "on"}): $msg", error)
                 if (!effectsDisabled) {
-                    // Retry once without effects so the video still plays.
+                    // Retry once without effects so the video still plays. The next look picked
+                    // tries the effects again (see applyLut).
                     effectsDisabled = true
+                    effectsOffAt = SystemClock.uptimeMillis()
+                    effectsError = msg
                     val position = player.currentPosition
                     player.setVideoEffects(emptyList())
                     player.seekTo(position)
                     player.prepare()
                     player.playWhenReady = true
-                    setStatus("Preview error, LUT preview off (plain video shown): $msg")
+                    showEffectsOff()
                 } else {
                     setStatus("Playback error: $msg")
                 }
@@ -291,6 +308,7 @@ class MainActivity : AppCompatActivity() {
             }
             onHoldEnd = { endCompare() }
             exclude = playerView.findViewById(androidx.media3.ui.R.id.exo_progress)
+            setupQuickScrub(this)
         }
         setupScrubbing()
         backCallback = object : OnBackPressedCallback(false) {
@@ -311,14 +329,30 @@ class MainActivity : AppCompatActivity() {
     }
 
     // While the seek bar is dragged, the frame under it updates live and the controls' dark scrim
-    // and centre buttons step aside so the graded picture can be judged.
+    // and centre buttons step aside so the graded picture can be judged. Letting go hides the
+    // controls altogether: the play button and scrim only come back when the video is tapped.
     private fun setupScrubbing() {
         playerView.setTimeBarScrubbingEnabled(true)
         val bar = playerView.findViewById<androidx.media3.ui.DefaultTimeBar>(androidx.media3.ui.R.id.exo_progress) ?: return
         val scrim = playerView.findViewById<View>(androidx.media3.ui.R.id.exo_controls_background)
         val centre = playerView.findViewById<View>(androidx.media3.ui.R.id.exo_center_controls)
+        var hidingAfterScrub = false
+        // The scrim and buttons stay faded until the controls are fully hidden, then are put back
+        // so the next tap shows them normally.
+        playerView.setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
+            if (visibility != View.VISIBLE && hidingAfterScrub) {
+                hidingAfterScrub = false
+                scrim?.animate()?.cancel()
+                centre?.animate()?.cancel()
+                scrim?.alpha = 1f
+                centre?.alpha = 1f
+            }
+        })
         bar.addListener(object : androidx.media3.ui.TimeBar.OnScrubListener {
             override fun onScrubStart(timeBar: androidx.media3.ui.TimeBar, position: Long) {
+                // A finished video keeps playWhenReady set and would play on from the new spot.
+                // Scrubbing is for finding a frame, so if it wasn't playing it stays paused.
+                if (!player.isPlaying) player.playWhenReady = false
                 player.setScrubbingModeEnabled(true)
                 scrim?.animate()?.alpha(0f)?.setDuration(120)?.start()
                 centre?.animate()?.alpha(0f)?.setDuration(120)?.start()
@@ -328,10 +362,39 @@ class MainActivity : AppCompatActivity() {
 
             override fun onScrubStop(timeBar: androidx.media3.ui.TimeBar, position: Long, canceled: Boolean) {
                 player.setScrubbingModeEnabled(false)
-                scrim?.animate()?.alpha(1f)?.setDuration(200)?.start()
-                centre?.animate()?.alpha(1f)?.setDuration(200)?.start()
+                hidingAfterScrub = true
+                scrim?.animate()?.cancel()
+                centre?.animate()?.cancel()
+                scrim?.alpha = 0f
+                centre?.alpha = 0f
+                // Posted: the controller handles the end of the touch after this and would
+                // otherwise restart its show timer.
+                playerView.post { playerView.hideController() }
             }
         })
+    }
+
+    // With the controls hidden, only a thin progress line is left and Media3 treats a swipe on it as
+    // a tap that brings the controls up. Instead, a sideways drag along the bottom of the video
+    // scrubs straight away and the controls stay hidden; a plain tap still shows them.
+    private fun setupQuickScrub(holder: HoldToCompareLayout) {
+        var wasPlaying = false
+        holder.quickScrubEnabled = {
+            videoUri != null && !playerView.isControllerFullyVisible && player.duration > 0
+        }
+        holder.onQuickScrubStart = {
+            // isPlaying, not playWhenReady: a finished video keeps playWhenReady set and would
+            // start playing again from wherever the scrub stopped.
+            wasPlaying = player.isPlaying
+            player.playWhenReady = false
+            player.setScrubbingModeEnabled(true)
+        }
+        holder.onQuickScrubTo = { fraction -> player.seekTo((fraction * player.duration).toLong()) }
+        holder.onQuickScrubEnd = {
+            player.setScrubbingModeEnabled(false)
+            player.playWhenReady = wasPlaying
+            scheduleThumbCapture()
+        }
     }
 
     override fun onDestroy() {
@@ -361,6 +424,24 @@ class MainActivity : AppCompatActivity() {
                     true
                 }
                 R.id.menu_load_look -> { pickLut.launch(arrayOf("*/*")); true }
+                R.id.menu_categories -> { showCategoryPicker(); true }
+                R.id.menu_carousel -> {
+                    carouselLayout = !carouselLayout
+                    item.isChecked = carouselLayout
+                    prefs.edit().putBoolean("looks_carousel", carouselLayout).apply()
+                    looksAdapter.resetStripScroll()
+                    applyLooksLayout()
+                    rebuildLooksRows()
+                    looksList.scrollToPosition(0)
+                    true
+                }
+                R.id.menu_hide_chips -> {
+                    hideChipsOnScroll = !hideChipsOnScroll
+                    item.isChecked = hideChipsOnScroll
+                    prefs.edit().putBoolean("hide_chips_on_scroll", hideChipsOnScroll).apply()
+                    if (!hideChipsOnScroll) setChipsShown(findViewById(R.id.chipScroll), true)
+                    true
+                }
                 R.id.menu_full_lut -> {
                     fullLut = !fullLut
                     item.isChecked = fullLut
@@ -380,6 +461,8 @@ class MainActivity : AppCompatActivity() {
                 else -> false
             }
         }
+        toolbar.menu.findItem(R.id.menu_carousel)?.isChecked = carouselLayout
+        toolbar.menu.findItem(R.id.menu_hide_chips)?.isChecked = hideChipsOnScroll
         toolbar.menu.findItem(R.id.menu_keep_colour)?.isChecked = advKeepColour
         toolbar.menu.findItem(R.id.menu_show_diag)?.isChecked = advDiag
     }
@@ -444,12 +527,22 @@ class MainActivity : AppCompatActivity() {
         if (currentEffects !== lutEffects) swapEffects(currentEffects) else redrawIfPaused()
     }
 
-    // A paused player only redraws on a new frame, so seek to the same position to push one through.
+    // A paused player only draws when a new frame arrives, so seek to push the same frame through the
+    // new LUT. ExoPlayer ignores a seek to the current millisecond while paused, so nudge by 1 ms:
+    // the same frame is shown, but it is decoded and drawn again. (VideoFrameProcessor.REDRAW was
+    // tried and showed the frame without any effects on the emulator.)
     private fun redrawIfPaused() {
         if (player.mediaItemCount == 0 || player.playbackState == Player.STATE_IDLE || player.isPlaying) return
         val controlsShown = playerView.isControllerFullyVisible
-        player.seekTo(player.currentPosition)
+        seekToRedraw(player.currentPosition)
         if (!controlsShown) playerView.hideController()
+    }
+
+    // Seeks to (almost exactly) a position in a way ExoPlayer won't skip, so the frame is redrawn.
+    private fun seekToRedraw(position: Long) {
+        val duration = player.duration
+        val target = if (duration != C.TIME_UNSET && position + 1 >= duration) maxOf(0L, position - 1) else position + 1
+        player.seekTo(target)
     }
 
     private fun swapEffects(effects: List<Effect>) {
@@ -460,8 +553,9 @@ class MainActivity : AppCompatActivity() {
         player.setVideoEffects(effects)
         effectsApplied++
         if (player.mediaItemCount > 0 && player.playbackState != Player.STATE_IDLE) {
-            // A paused player only redraws on a new frame, so seek to the same position to push one through.
-            if (!playing || abs(player.currentPosition - position) > 300) player.seekTo(position)
+            // A paused player only redraws on a new frame, so seek to push one through.
+            if (!playing) seekToRedraw(position)
+            else if (abs(player.currentPosition - position) > 300) player.seekTo(position)
         }
         player.playWhenReady = playing
         if (!controlsShown) playerView.hideController()
@@ -641,16 +735,75 @@ class MainActivity : AppCompatActivity() {
             onToggleFavourite = { toggleFavourite(it) },
             isFavourite = { it in favourites },
         )
-        val span = maxOf(3, (resources.configuration.screenWidthDp - 16) / 116)
-        looksList.layoutManager = GridLayoutManager(this, span).apply {
-            spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
-                override fun getSpanSize(position: Int) = if (looksAdapter.isHeader(position)) span else 1
-            }
-        }
+        // Strip tiles are as wide as grid tiles: the list's width over the column count, less the
+        // tile's 4dp margin on each side.
+        val density = resources.displayMetrics.density
+        looksAdapter.stripTileWidth =
+            (((resources.configuration.screenWidthDp - 16) / lookColumns().toFloat() - 8) * density).roundToInt()
         looksList.adapter = looksAdapter
+        applyLooksLayout()
         looksAdapter.selectedIndex = selectedLook
         rebuildChips()
         rebuildLooksRows()
+        setupChipAutoHide()
+    }
+
+    private fun lookColumns() = maxOf(3, (resources.configuration.screenWidthDp - 16) / 116)
+
+    // Grid: headers across the full width, tiles in columns. Carousel: a vertical list of
+    // headers and sideways strips.
+    private fun applyLooksLayout() {
+        looksList.layoutManager = if (carouselLayout) {
+            LinearLayoutManager(this)
+        } else {
+            val span = lookColumns()
+            GridLayoutManager(this, span).apply {
+                spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
+                    override fun getSpanSize(position: Int) = if (looksAdapter.isHeader(position)) span else 1
+                }
+            }
+        }
+    }
+
+    // The category bar slides away while the looks are scrolled down and comes back on the way
+    // up or at the top, giving the looks more room. Off in settings keeps it always shown.
+    private fun setupChipAutoHide() {
+        val bar = findViewById<View>(R.id.chipScroll)
+        // The list starts below the floating bar: pad it by the bar's height.
+        bar.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
+            val h = bottom - top
+            if (looksList.paddingTop != h) {
+                looksList.setPadding(looksList.paddingLeft, h, looksList.paddingRight, looksList.paddingBottom)
+            }
+        }
+        val slop = 12 * resources.displayMetrics.density
+        var travel = 0f
+        looksList.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) {
+                if (!hideChipsOnScroll || dy == 0) return
+                travel = if ((travel > 0) == (dy > 0)) travel + dy else dy.toFloat()
+                when {
+                    !rv.canScrollVertically(-1) || travel < -slop -> setChipsShown(bar, true)
+                    travel > slop -> setChipsShown(bar, false)
+                }
+            }
+        })
+    }
+
+    private var chipsShown = true
+
+    // Slides the bar up out of view (clipped by its frame) or back down. No layout change.
+    private fun setChipsShown(bar: View, shown: Boolean) {
+        if (chipsShown == shown) return
+        chipsShown = shown
+        bar.animate().cancel()
+        if (shown) {
+            bar.visibility = View.VISIBLE
+            bar.animate().translationY(0f).alpha(1f).setDuration(160).start()
+        } else {
+            bar.animate().translationY(-bar.height.toFloat()).alpha(0f).setDuration(160)
+                .withEndAction { if (!chipsShown) bar.visibility = View.INVISIBLE }.start()
+        }
     }
 
     private fun selectLook(index: Int) {
@@ -786,20 +939,53 @@ class MainActivity : AppCompatActivity() {
         else -> throw IllegalStateException("${look.name} is not a LUT")
     }
 
+    // Favourites show at the top of the list as well as in their own category, so the rows are
+    // rebuilt; every copy of the look gets the new star.
     private fun toggleFavourite(key: String) {
         if (!favourites.remove(key)) favourites.add(key)
         prefs.edit().putStringSet("favourites", HashSet(favourites)).apply()
-        if (categoryFilter == FILTER_FAVS) rebuildLooksRows()
+        rebuildLooksRows()
     }
 
     private fun sortedCategories(): List<String> =
         looks.map { it.category }.filter { it.isNotEmpty() }.distinct()
             .sortedWith(compareBy({ LookCategories.sortKey(it) }, { it }))
 
+    private fun shownCategories() = sortedCategories().filter { it !in hiddenCategories }
+
+    // Tick boxes for every category, all on by default. Off ones leave the category bar and the
+    // "All" list; looks already starred still show under Favourites.
+    private fun showCategoryPicker() {
+        val all = sortedCategories().filter { it != LookCategories.DIAGNOSTICS }
+        val checked = BooleanArray(all.size) { all[it] !in hiddenCategories }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.categories_title)
+            .setMultiChoiceItems(all.toTypedArray(), checked) { _, which, on -> checked[which] = on }
+            .setNeutralButton(R.string.categories_all_on) { _, _ ->
+                hiddenCategories.clear()
+                saveHiddenCategories()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                hiddenCategories.removeAll(all.toSet())
+                all.forEachIndexed { i, c -> if (!checked[i]) hiddenCategories.add(c) }
+                saveHiddenCategories()
+            }
+            .show()
+    }
+
+    private fun saveHiddenCategories() {
+        prefs.edit().putStringSet("hidden_categories", HashSet(hiddenCategories)).apply()
+        looksAdapter.resetStripScroll()
+        rebuildChips()
+        rebuildLooksRows()
+        regenerateThumbnails()
+    }
+
     private fun rebuildChips() {
         chips.setOnCheckedStateChangeListener(null)
         chips.removeAllViews()
-        val filters = listOf(FILTER_ALL, FILTER_FAVS) + sortedCategories()
+        val filters = listOf(FILTER_ALL, FILTER_FAVS) + shownCategories()
         if (categoryFilter !in filters) categoryFilter = FILTER_ALL
         for (f in filters) {
             chips.addView(Chip(this).apply {
@@ -819,34 +1005,50 @@ class MainActivity : AppCompatActivity() {
             val chip = ids.firstOrNull()?.let { group.findViewById<Chip>(it) } ?: return@setOnCheckedStateChangeListener
             categoryFilter = chip.tag as String
             prefs.edit().putString("filter", categoryFilter).apply()
+            looksAdapter.resetStripScroll()
             rebuildLooksRows()
             looksList.scrollToPosition(0)
             regenerateThumbnails()
         }
     }
 
-    // "No look" always comes first so the input-only result is one tap away in every view.
+    // "No look" always comes first so the input-only result is one tap away in every view. In
+    // "All", favourites follow it in their own section, and also stay in their category.
     private fun rebuildLooksRows() {
         fun row(i: Int) = LooksRow.Look(i, looks[i].name, looks[i].favKey)
-        val rows = ArrayList<LooksRow>()
-        rows.add(row(0))
+        fun isFav(i: Int) = looks[i].favKey?.let { it in favourites } == true
         val shown = (1 until looks.size).filter { i ->
             when (categoryFilter) {
-                FILTER_ALL -> true
-                FILTER_FAVS -> looks[i].favKey?.let { it in favourites } == true
+                FILTER_ALL -> looks[i].category !in hiddenCategories
+                FILTER_FAVS -> isFav(i)
                 else -> looks[i].category == categoryFilter
             }
         }
-        if (categoryFilter == FILTER_FAVS && shown.isEmpty()) rows.add(LooksRow.Header(getString(R.string.no_favourites)))
-        if (categoryFilter == FILTER_ALL || categoryFilter == FILTER_FAVS) {
-            shown.groupBy { looks[it].category }
-                .toSortedMap(compareBy<String>({ LookCategories.sortKey(it) }, { it }))
-                .forEach { (category, indices) ->
-                    rows.add(LooksRow.Header(category))
-                    indices.forEach { rows.add(row(it)) }
+        // Sections in order: (header or null, looks).
+        val sections = ArrayList<Pair<String?, List<Int>>>()
+        when (categoryFilter) {
+            FILTER_ALL, FILTER_FAVS -> {
+                // "All": "No look" leads the Favourites section (no header if there are none yet).
+                // Favourites from switched-off categories still show here.
+                val favs = if (categoryFilter == FILTER_ALL) (1 until looks.size).filter(::isFav) else emptyList()
+                sections.add((if (favs.isNotEmpty()) getString(R.string.chip_favourites) else null) to listOf(0) + favs)
+                if (categoryFilter == FILTER_FAVS && shown.isEmpty()) {
+                    sections.add(getString(R.string.no_favourites) to emptyList())
                 }
-        } else {
-            shown.forEach { rows.add(row(it)) }
+                shown.groupBy { looks[it].category }
+                    .toSortedMap(compareBy<String>({ LookCategories.sortKey(it) }, { it }))
+                    .forEach { (category, indices) -> sections.add(category to indices) }
+            }
+            // One category: a single run of looks, "No look" first.
+            else -> sections.add(null to listOf(0) + shown)
+        }
+
+        val rows = ArrayList<LooksRow>()
+        sections.forEachIndexed { n, (title, indices) ->
+            if (title != null) rows.add(LooksRow.Header(title))
+            if (indices.isEmpty()) return@forEachIndexed
+            if (carouselLayout) rows.add(LooksRow.Strip("$n:$title", indices.map(::row)))
+            else indices.forEach { rows.add(row(it)) }
         }
         looksAdapter.rows = rows
     }
@@ -1016,7 +1218,8 @@ class MainActivity : AppCompatActivity() {
         resolve { cube, _, _, _ ->
             currentCube = cube
             applyLut(cube)
-            clearStatus()
+            // A preview error stays on screen for as long as the preview is plain.
+            if (effectsDisabled) showEffectsOff() else clearStatus()
         }
     }
 
@@ -1052,7 +1255,14 @@ class MainActivity : AppCompatActivity() {
     private fun applyLut(cube: Array<Array<IntArray>>?) {
         lookCube = cube
         if (!comparing) liveLut.set(cube ?: identityCube)
-        if (currentEffects !== lutEffects) {
+        if (effectsDisabled && videoUri != null && !comparing &&
+            SystemClock.uptimeMillis() - effectsOffAt > EFFECTS_RETRY_MS
+        ) {
+            // The preview fell back to plain video after an error. A new look is a fresh chance:
+            // rebuild the effects pipeline. If it fails again, onPlayerError turns it back off.
+            effectsDisabled = false
+            applyEffects(newLutEffects())
+        } else if (currentEffects !== lutEffects) {
             // Coming back from a diagnostic effect: put the live LUT back in the pipeline.
             applyEffects(newLutEffects())
         } else {
@@ -1340,6 +1550,10 @@ class MainActivity : AppCompatActivity() {
         status.visibility = View.VISIBLE
     }
 
+    private fun showEffectsOff() {
+        setStatus("Preview error, LUT preview off (plain video shown). Pick a look to retry. ${effectsError ?: ""}")
+    }
+
     private fun clearStatus() {
         statusShown = false
         status.visibility = View.GONE
@@ -1357,6 +1571,9 @@ class MainActivity : AppCompatActivity() {
         const val SPLASH_MIN_MS = 700L
         const val MAX_LAYERS = 5
         const val THUMB_LONG_SIDE = 240
+        const val TAG = "LutMaster"
+        // Don't rebuild a failing effects pipeline more than about once a second (strength drags).
+        const val EFFECTS_RETRY_MS = 1000L
         const val SCAN_BYTES = 2 * 1024 * 1024
         const val FILTER_ALL = "\u0000all"
         const val FILTER_FAVS = "\u0000favourites"

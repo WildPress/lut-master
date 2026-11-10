@@ -13,8 +13,8 @@ android {
         applicationId = "app.lutapply"
         minSdk = 26
         targetSdk = 35
-        versionCode = 18
-        versionName = "0.13.2"
+        versionCode = 25
+        versionName = "0.18.0"
     }
 
     // Debug builds use the project's own key when it's present (git-ignored), so builds from Docker

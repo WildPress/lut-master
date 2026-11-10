@@ -20,9 +20,10 @@
         android:layout_height="wrap_content"
         android:orientation="vertical">
 
-        <FrameLayout
+        <!-- Square whatever the video's shape; the frame is centre-cropped to fit. -->
+        <app.lutapply.SquareFrameLayout
             android:layout_width="match_parent"
-            android:layout_height="96dp">
+            android:layout_height="wrap_content">
 
             <ImageView
                 android:id="@+id/thumbnail"
@@ -43,7 +44,7 @@
                 android:padding="5dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_star_border" />
-        </FrameLayout>
+        </app.lutapply.SquareFrameLayout>
 
         <TextView
             android:id="@+id/lookName"
