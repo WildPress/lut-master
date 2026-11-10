@@ -34,7 +34,11 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.ExtractorsFactory
+import androidx.media3.common.util.Clock
+import androidx.media3.datasource.DataSourceBitmapLoader
 import androidx.media3.transformer.Composition
+import androidx.media3.transformer.DefaultAssetLoaderFactory
+import androidx.media3.transformer.DefaultDecoderFactory
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.Effects
@@ -1137,6 +1141,15 @@ class MainActivity : AppCompatActivity() {
             .build()
 
         val t = Transformer.Builder(this)
+            .setAssetLoaderFactory(
+                DefaultAssetLoaderFactory(
+                    this,
+                    DefaultDecoderFactory.Builder(this).build(),
+                    Clock.DEFAULT,
+                    DefaultMediaSourceFactory(this, StripLogTagExtractorsFactory(DefaultExtractorsFactory())),
+                    DataSourceBitmapLoader.Builder(this).build(),
+                ),
+            )
             .addListener(object : Transformer.Listener {
                 override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                     finishExport(out, fileLabel, uri, lut)
