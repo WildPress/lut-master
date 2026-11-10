@@ -108,139 +108,150 @@
             android:visibility="gone" />
     </app.lutapply.HoldToCompareLayout>
 
+    <!-- Everything under the video shares this fixed share of the screen, so the video never
+         changes size when the layers panel or the camera row appear. They take room from the grid. -->
     <LinearLayout
-        android:id="@+id/profileRow"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:visibility="gone"
-        android:background="@color/surface_container"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingHorizontal="16dp">
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/camera_label"
-            android:textColor="?colorOnSurfaceVariant"
-            android:textSize="13sp" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/profileButton"
-            style="@style/Widget.Material3.Button.TextButton"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:ellipsize="end"
-            android:gravity="start|center_vertical"
-            android:maxLines="1"
-            app:icon="@drawable/ic_arrow_drop_down"
-            app:iconGravity="end" />
-    </LinearLayout>
-
-    <!-- Hidden until a look is picked. One row of layer pills plus one slider for the selected
-         layer, so it stays the same height however many layers there are. -->
-    <LinearLayout
-        android:id="@+id/layersPanel"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:background="@color/surface_container"
-        android:orientation="vertical"
-        android:paddingTop="6dp"
-        android:visibility="gone">
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-
-            <androidx.recyclerview.widget.RecyclerView
-                android:id="@+id/layersList"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:clipToPadding="false"
-                android:overScrollMode="never"
-                android:paddingStart="12dp"
-                android:paddingEnd="6dp" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/addLayer"
-                style="@style/Widget.Material3.Button.TextButton"
-                android:layout_width="wrap_content"
-                android:layout_height="40dp"
-                android:layout_marginEnd="4dp"
-                android:minHeight="0dp"
-                android:minWidth="0dp"
-                android:paddingHorizontal="10dp"
-                android:text="@string/add_layer"
-                app:icon="@drawable/ic_add"
-                app:iconPadding="4dp" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingStart="16dp"
-            android:paddingEnd="12dp">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/strength_label"
-                android:textColor="?colorOnSurfaceVariant"
-                android:textSize="13sp" />
-
-            <com.google.android.material.slider.Slider
-                android:id="@+id/strength"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:stepSize="5"
-                android:value="100"
-                android:valueFrom="0"
-                android:valueTo="100"
-                app:labelBehavior="gone"
-                app:tickVisible="false" />
-
-            <TextView
-                android:id="@+id/strengthValue"
-                android:layout_width="44dp"
-                android:layout_height="wrap_content"
-                android:gravity="end"
-                android:text="100%"
-                android:textColor="?colorOnSurface"
-                android:textSize="13sp" />
-        </LinearLayout>
-    </LinearLayout>
-
-    <HorizontalScrollView
-        android:id="@+id/chipScroll"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:scrollbars="none">
-
-        <com.google.android.material.chip.ChipGroup
-            android:id="@+id/categoryChips"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:paddingHorizontal="12dp"
-            app:selectionRequired="true"
-            app:singleLine="true"
-            app:singleSelection="true" />
-    </HorizontalScrollView>
-
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/looksList"
+        android:id="@+id/controlsArea"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="2"
-        android:clipToPadding="false"
-        android:paddingHorizontal="8dp"
-        android:paddingBottom="8dp" />
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:id="@+id/profileRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:visibility="gone"
+            android:background="@color/surface_container"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/camera_label"
+                android:textColor="?colorOnSurfaceVariant"
+                android:textSize="13sp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/profileButton"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:gravity="start|center_vertical"
+                android:maxLines="1"
+                app:icon="@drawable/ic_arrow_drop_down"
+                app:iconGravity="end" />
+        </LinearLayout>
+
+        <!-- Hidden until a look is picked. One row of layer pills plus one slider for the selected
+             layer, so it stays the same height however many layers there are. -->
+        <LinearLayout
+            android:id="@+id/layersPanel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@color/surface_container"
+            android:orientation="vertical"
+            android:paddingTop="6dp"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/layersList"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:clipToPadding="false"
+                    android:overScrollMode="never"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="6dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/addLayer"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="4dp"
+                    android:minHeight="0dp"
+                    android:minWidth="0dp"
+                    android:paddingHorizontal="10dp"
+                    android:text="@string/add_layer"
+                    app:icon="@drawable/ic_add"
+                    app:iconPadding="4dp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="16dp"
+                android:paddingEnd="12dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/strength_label"
+                    android:textColor="?colorOnSurfaceVariant"
+                    android:textSize="13sp" />
+
+                <com.google.android.material.slider.Slider
+                    android:id="@+id/strength"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:stepSize="5"
+                    android:value="100"
+                    android:valueFrom="0"
+                    android:valueTo="100"
+                    app:labelBehavior="gone"
+                    app:tickVisible="false" />
+
+                <TextView
+                    android:id="@+id/strengthValue"
+                    android:layout_width="44dp"
+                    android:layout_height="wrap_content"
+                    android:gravity="end"
+                    android:text="100%"
+                    android:textColor="?colorOnSurface"
+                    android:textSize="13sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <HorizontalScrollView
+            android:id="@+id/chipScroll"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:scrollbars="none">
+
+            <com.google.android.material.chip.ChipGroup
+                android:id="@+id/categoryChips"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:paddingHorizontal="12dp"
+                app:selectionRequired="true"
+                app:singleLine="true"
+                app:singleSelection="true" />
+        </HorizontalScrollView>
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/looksList"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:clipToPadding="false"
+            android:paddingHorizontal="8dp"
+            android:paddingBottom="8dp" />
+
+    </LinearLayout>
 
     <TextView
         android:id="@+id/debug"

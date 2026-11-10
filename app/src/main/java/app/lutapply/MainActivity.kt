@@ -414,7 +414,7 @@ class MainActivity : AppCompatActivity() {
         fullscreen = on
         val vis = if (on) View.GONE else View.VISIBLE
         if (on) tips.dismiss()
-        for (id in intArrayOf(R.id.toolbar, R.id.chipScroll, R.id.looksList)) {
+        for (id in intArrayOf(R.id.toolbar, R.id.controlsArea)) {
             findViewById<View>(id).visibility = vis
         }
         updateLayersPanel()
