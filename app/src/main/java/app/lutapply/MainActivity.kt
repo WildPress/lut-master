@@ -290,7 +290,9 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             onHoldEnd = { endCompare() }
+            exclude = playerView.findViewById(androidx.media3.ui.R.id.exo_progress)
         }
+        setupScrubbing()
         backCallback = object : OnBackPressedCallback(false) {
             override fun handleOnBackPressed() = setFullscreen(false)
         }
@@ -306,6 +308,30 @@ class MainActivity : AppCompatActivity() {
         exportButton.setOnClickListener { startExport() }
         if (inputs.size == 1 && looks.size == 1) setStatus("No bundled LUTs found. Use the menu to load one.")
         tips.show("looks", looksList, R.string.tip_looks, Tips.Place.INSIDE_TOP)
+    }
+
+    // While the seek bar is dragged, the frame under it updates live and the controls' dark scrim
+    // and centre buttons step aside so the graded picture can be judged.
+    private fun setupScrubbing() {
+        playerView.setTimeBarScrubbingEnabled(true)
+        val bar = playerView.findViewById<androidx.media3.ui.DefaultTimeBar>(androidx.media3.ui.R.id.exo_progress) ?: return
+        val scrim = playerView.findViewById<View>(androidx.media3.ui.R.id.exo_controls_background)
+        val centre = playerView.findViewById<View>(androidx.media3.ui.R.id.exo_center_controls)
+        bar.addListener(object : androidx.media3.ui.TimeBar.OnScrubListener {
+            override fun onScrubStart(timeBar: androidx.media3.ui.TimeBar, position: Long) {
+                player.setScrubbingModeEnabled(true)
+                scrim?.animate()?.alpha(0f)?.setDuration(120)?.start()
+                centre?.animate()?.alpha(0f)?.setDuration(120)?.start()
+            }
+
+            override fun onScrubMove(timeBar: androidx.media3.ui.TimeBar, position: Long) = Unit
+
+            override fun onScrubStop(timeBar: androidx.media3.ui.TimeBar, position: Long, canceled: Boolean) {
+                player.setScrubbingModeEnabled(false)
+                scrim?.animate()?.alpha(1f)?.setDuration(200)?.start()
+                centre?.animate()?.alpha(1f)?.setDuration(200)?.start()
+            }
+        })
     }
 
     override fun onDestroy() {
