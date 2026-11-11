@@ -303,6 +303,15 @@ class MainActivity : AppCompatActivity() {
         })
         playerView.player = player
         playerView.setFullscreenButtonClickListener { setFullscreen(it) }
+        // The effects pipeline letterboxes each frame to the view's size when it draws it. A paused
+        // player draws nothing new, so after a resize (going in or out of fullscreen) the old frame
+        // would be stretched into the new shape. Push a fresh one through once the surface has the
+        // new size.
+        playerView.videoSurfaceView?.addOnLayoutChangeListener { v, l, t, r, b, oldL, oldT, oldR, oldB ->
+            if (r - l != oldR - oldL || b - t != oldB - oldT) {
+                v.postDelayed({ if (!comparing && !effectsDisabled) redrawIfPaused() }, 100)
+            }
+        }
 
         findViewById<HoldToCompareLayout>(R.id.playerHolder).apply {
             onHoldStart = {
@@ -410,7 +419,8 @@ class MainActivity : AppCompatActivity() {
     private fun togglePlayback(): Boolean {
         if (videoUri == null || player.mediaItemCount == 0) return false
         if (referenceMode) return true
-        if (player.isPlaying) {
+        // playWhenReady, not isPlaying: while it's buffering a tap should still pause.
+        if (player.playWhenReady && player.playbackState != Player.STATE_ENDED) {
             player.playWhenReady = false
             playerView.showController()
         } else {
