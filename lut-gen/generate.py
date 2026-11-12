@@ -592,12 +592,24 @@ def faded_green(x):
     return floor_ceiling(x, (0.055, 0.075, 0.115), (0.955, 0.958, 0.962))
 
 
+def china_street_film(x):
+    """China street film (toros.cangar): gentle filmic contrast, muted teal-green greens and blues,
+    warm midtones and shadows, natural skin, reds and pinks kept punchy, lifted blacks."""
+    x = grade(x, g=1.1, sat=0.82, sh=(0.012, 0.0, -0.014), mid=(0.008, 0.003, -0.01), hi=(-0.006, 0.006, -0.002),
+              hue=[(0, 22, 1.35, 0, 1.0), (340, 20, 1.3, 0, 1.0), (25, 20, 1.08, 0, 1.0),
+                   (110, 45, 0.55, 25, 0.95), (200, 40, 0.75, -12, 1.0)])
+    x = shoulder(np.clip(x, 0, 1), 0.8)
+    return floor_ceiling(x, (0.05, 0.048, 0.042), (0.93, 0.95, 0.93))
+
+
 CATEGORY_LOOKS = {
     "moody-landscape": {
         "fog-grey": dict(title="Fog grey (drained cool greys, lifted shadows, soft white sky)", fn=fog_grey),
         "teal-night": dict(title="Teal night (moonlit monochrome teal, crushed blacks)", fn=teal_night),
         "dark-forest": dict(title="Dark forest (low-key teal woods in fog)", fn=dark_forest),
         "faded-green": dict(title="Faded green (muted olive greens, navy-lifted blacks)", fn=faded_green),
+        "china-street-film": dict(title="China street film (warm mids, muted teal greens, punchy reds)",
+                                  fn=china_street_film),
     },
     "slide-film": {
         "velvia-punch": dict(
