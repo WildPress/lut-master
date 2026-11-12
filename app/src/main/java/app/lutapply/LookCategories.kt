@@ -12,7 +12,7 @@ object LookCategories {
     )
 
     private val order = listOf(
-        "Cinematic", "Film", "Slide Film", "Atmospheric", "Vivid", "Beauty", "Moody", "Gritty", "Horror", "Cyberpunk", "Quirky",
+        "Cinematic", "Film", "Slide Film", "Atmospheric", "Moody Landscape", "Vivid", "Beauty", "Moody", "Gritty", "Horror", "Cyberpunk", "Quirky",
         "Vintage", "Cross Processing", "Black & White", "Tinted Blacks", "Foggy Forest", "Underwater",
         "Kawaii", "Glitch", "Thermal",
     )

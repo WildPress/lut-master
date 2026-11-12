@@ -543,7 +543,62 @@ def atmos(x, black, glow=0.0, knee=0.8, glow_tint=(1, 1, 1), **kw):
     return np.clip(b + (1 - b) * x, 0, 1)
 
 
+def floor_ceiling(x, black, white):
+    """Squeezes the tonal range between a coloured black and a coloured white."""
+    b = np.array(black)
+    w = np.array(white)
+    return np.clip(b + (w - b) * np.clip(x, 0, 1), 0, 1)
+
+
+# Moody landscape looks, matched by eye and by luma-band colour averages to reference stills
+# James collected (Instagram #moodylandscape). Working back from finished photos is approximate.
+def fog_grey(x):
+    """Hallstatt fog: colour drained (warm accents keep a little), low contrast, cool blue-grey
+    shadows on a lifted floor, a soft off-white ceiling."""
+    x = grade(x, g=0.85, sat=0.32, hue=[(30, 30, 1.9, -4, 1.0), (120, 50, 0.6, 25, 1.0)])
+    y = luma(x)[..., None]
+    x = x + (1 - smoothstep(0.0, 0.6, y)) * np.array([-0.012, 0.0, 0.012])
+    x = np.power(np.clip(x, 0, 1), 0.8)
+    return floor_ceiling(x, (0.09, 0.10, 0.112), (0.885, 0.892, 0.902))
+
+
+def teal_night(x):
+    """Moonlit pines: everything on one teal hue, crushed blacks, highlights stop short of white."""
+    y = luma(np.clip(x, 0, 1))
+    t = scurve(np.clip((y - 0.05) / 0.9, 0, 1), 0.4, 1.35)
+    return gradient_map(t, [(0.0, (0.0, 0.012, 0.016)), (0.25, (0.03, 0.19, 0.245)),
+                            (0.55, (0.16, 0.43, 0.53)), (0.8, (0.36, 0.64, 0.72)),
+                            (1.0, (0.62, 0.82, 0.86))])
+
+
+def dark_forest(x):
+    """Wall of fog: a low-key teal forest. Tone comes from a dark teal ramp, a third of the
+    original colour (greens turned toward teal) rides on top, the brightest fog is a dim cyan-grey."""
+    x = np.clip(x, 0, 1)
+    t = scurve(np.clip((luma(x) - 0.04) / 0.92, 0, 1), 0.45, 1.25)
+    ramp = gradient_map(np.power(t, 1.12), [(0.0, (0.004, 0.022, 0.024)), (0.3, (0.07, 0.16, 0.17)),
+                                            (0.65, (0.17, 0.38, 0.43)), (1.0, (0.4, 0.62, 0.68))])
+    keep = grade(hue_adjust(x, [(100, 60, 0.7, 50, 1.0), (30, 40, 0.5, 0, 1.0)]), g=1.2, sat=0.6)
+    return np.clip(ramp + (keep - luma(keep)[..., None]) * 0.35, 0, 1)
+
+
+def faded_green(x):
+    """Faded green film: navy-lifted blacks, greens drained toward olive, gentle contrast, cool
+    clean whites."""
+    x = grade(x, g=1.05, sat=0.7, hue=[(110, 45, 0.9, -6, 0.95), (30, 30, 0.8, 0, 1.0), (210, 40, 0.8, 0, 1.0)])
+    y = luma(x)[..., None]
+    x = (x + (1 - smoothstep(0.0, 0.55, y)) * np.array([-0.018, 0.01, 0.006])
+         + smoothstep(0.55, 1.0, y) * np.array([-0.008, 0.0, 0.01]))
+    return floor_ceiling(x, (0.055, 0.075, 0.115), (0.955, 0.958, 0.962))
+
+
 CATEGORY_LOOKS = {
+    "moody-landscape": {
+        "fog-grey": dict(title="Fog grey (drained cool greys, lifted shadows, soft white sky)", fn=fog_grey),
+        "teal-night": dict(title="Teal night (moonlit monochrome teal, crushed blacks)", fn=teal_night),
+        "dark-forest": dict(title="Dark forest (low-key teal woods in fog)", fn=dark_forest),
+        "faded-green": dict(title="Faded green (muted olive greens, navy-lifted blacks)", fn=faded_green),
+    },
     "slide-film": {
         "velvia-punch": dict(
             title="Velvia punch (Velvia 50 style pushed further: denser colour, deeper blues)",
