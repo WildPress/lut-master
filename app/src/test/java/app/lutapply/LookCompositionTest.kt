@@ -34,7 +34,7 @@ class LookCompositionTest {
             File("src/main/assets/luts/input/samsung-log-to-rec709.cube").exists(),
         )
         val samsung = load("src/main/assets/luts/input/samsung-log-to-rec709.cube")
-        val bamboo = load("src/main/assets/luts/looks/bamboo-haze.cube")
+        val bamboo = load("src/main/assets/luts/looks/foggy-forest/bamboo-haze.cube")
         val composed = LutMath.compose(samsung, bamboo, 33)
         val samsungOnly = LutMath.compose(samsung, null, 33)
         val out = FloatArray(3)

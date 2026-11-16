@@ -136,6 +136,24 @@ def dlog_encode(y):
     return np.clip(np.where(y <= 0.0078, 6.025 * y + 0.0929, hi), 0, 1)
 
 
+# Blackmagic Film Generation 5: log above LIN_CUT, linear toe below (white paper constants).
+BMD5_A, BMD5_B, BMD5_C = 0.08692876065491224, 0.005494072432257808, 0.5300133392291939
+BMD5_D, BMD5_E, BMD5_LIN_CUT = 8.283605932402494, 0.09246575342465753, 0.005
+BMD5_LOG_CUT = BMD5_D * BMD5_LIN_CUT + BMD5_E
+PBMDWG = [(0.7177215, 0.3171181), (0.2280410, 0.8615690), (0.1005841, -0.0820452)]  # Blackmagic Wide Gamut
+
+
+def bmd_gen5_decode(x):
+    x = np.asarray(x, dtype=np.float64)
+    return np.where(x < BMD5_LOG_CUT, (x - BMD5_E) / BMD5_D, np.exp((x - BMD5_C) / BMD5_A) - BMD5_B)
+
+
+def bmd_gen5_encode(y):
+    y = np.asarray(y, dtype=np.float64)
+    hi = BMD5_A * np.log(_pos(y + BMD5_B)) + BMD5_C
+    return np.clip(np.where(y < BMD5_LIN_CUT, BMD5_D * y + BMD5_E, hi), 0, 1)
+
+
 # name -> (decode, encode, matrix-to-709, source note, published anchors {reflection: 10-bit code})
 PROFILES = {
     "sony-slog3-to-rec709": dict(
@@ -162,6 +180,11 @@ PROFILES = {
         title="DJI D-Log / D-Gamut (Zenmuse X7/X9)", dec=dlog_decode, enc=dlog_encode, M=M_DGAMUT_PUB,
         prim=PDGAMUT, anchors={0.0: 95, 0.18: 408, 0.90: 586}, label="D-Log",
         source="DJI D-Log/D-Gamut White Paper, Zenmuse X9 (2022.02), pages 3-4 and 7; consumer D-Log M may differ"),
+    "blackmagic-film-gen5-to-rec709": dict(
+        title="Blackmagic Film Gen 5 / Blackmagic Wide Gamut", dec=bmd_gen5_decode, enc=bmd_gen5_encode,
+        M=derive_to_709(PBMDWG), prim=PBMDWG, anchors={}, label="BMD Film",
+        source="Blackmagic Generation 5 Color Science white paper curve and Wide Gamut primaries (matrix derived; "
+               "for the Blackmagic Camera app's 'Blackmagic Design Film' log, not yet checked against real footage)"),
 }
 
 
@@ -606,17 +629,12 @@ CATEGORY_LOOKS = {
     "moody-landscape": {
         "fog-grey": dict(title="Fog grey (drained cool greys, lifted shadows, soft white sky)", fn=fog_grey),
         "teal-night": dict(title="Teal night (moonlit monochrome teal, crushed blacks)", fn=teal_night),
-        "dark-forest": dict(title="Dark forest (low-key teal woods in fog)", fn=dark_forest),
+        "foggy-teal-woods": dict(title="Foggy teal woods (low-key teal woods in fog)", fn=dark_forest),
         "faded-green": dict(title="Faded green (muted olive greens, navy-lifted blacks)", fn=faded_green),
         "china-street-film": dict(title="China street film (warm mids, muted teal greens, punchy reds)",
                                   fn=china_street_film),
     },
     "slide-film": {
-        "velvia-punch": dict(
-            title="Velvia punch (Velvia 50 style pushed further: denser colour, deeper blues)",
-            fn=lambda x: grade(x, g=1.36, sat=1.6, crush=0.02,
-                               hue=[(0, 25, 1.25, 0, 1.0), (120, 40, 1.3, 0, 1.0), (215, 35, 1.3, 5, 0.95),
-                                    (300, 30, 1.15, -8, 1.0), (45, 25, 1.15, 0, 1.0)])),
         "golden-slide": dict(
             title="Golden slide (saturated slide colour with warm golden-hour highlights)",
             fn=lambda x: grade(x, g=1.3, sat=1.45, crush=0.015, gain=(1.04, 1.0, 0.92),
@@ -916,12 +934,20 @@ CATEGORY_LOOKS = {
     },
     "vivid": {
         "pop": dict(
-            title="Pop (bright, clean, saturated)",
-            fn=lambda x: look(x, g=1.15, sat=1.38, hue=[(25, 22, 0.85, 0, 1.0)])),
+            title="Pop (bright, clean, bold saturated colour)",
+            fn=lambda x: look(x, g=1.28, sat=1.65, crush=0.012,
+                              hue=[(25, 22, 0.88, 0, 1.0), (0, 25, 1.15, 0, 1.0), (215, 35, 1.2, 0, 0.97),
+                                   (120, 40, 1.15, 0, 1.0), (55, 25, 1.15, 0, 1.0)])),
         "tropical": dict(
-            title="Tropical (aqua blues, lush greens, warm skin)",
-            fn=lambda x: look(x, g=1.12, sat=1.25, gain=(1.0, 1.0, 0.98),
-                              hue=[(210, 40, 1.35, -20, 1.0), (110, 40, 1.3, 10, 1.0), (25, 22, 1.05, 0, 1.0)])),
+            title="Tropical (intense aqua blues, lush greens, warm skin)",
+            fn=lambda x: look(x, g=1.24, sat=1.5, crush=0.01, gain=(1.0, 1.0, 0.98),
+                              hue=[(205, 40, 1.6, -22, 0.97), (175, 30, 1.45, 0, 1.0), (110, 40, 1.5, 10, 1.0),
+                                   (25, 22, 1.05, 0, 1.0), (50, 25, 1.2, 0, 1.0)])),
+        "velvia-punch": dict(
+            title="Velvia punch (Velvia 50 style pushed further: denser colour, deeper blues)",
+            fn=lambda x: grade(x, g=1.36, sat=1.6, crush=0.02,
+                               hue=[(0, 25, 1.25, 0, 1.0), (120, 40, 1.3, 0, 1.0), (215, 35, 1.3, 5, 0.95),
+                                    (300, 30, 1.15, -8, 1.0), (45, 25, 1.15, 0, 1.0)])),
     },
     "gritty": {
         "bleach-bypass": dict(
@@ -945,6 +971,18 @@ CATEGORY_LOOKS = {
             fn=lambda x: look(x, g=1.4, sat=1.45, crush=0.03, gain=(1.0, 1.02, 0.88))),
     },
 }
+# "Moody landscape" was merged into "Moody" in 0.29.0.
+CATEGORY_LOOKS["moody"].update(CATEGORY_LOOKS.pop("moody-landscape"))
+
+# Looks that used to sit loose in luts/looks get folders too (0.29.0).
+LOOSE_FOLDERS = {"film": ("kodak-", "fuji-", "cinestill-"), "tinted-blacks": ("blacks-",)}
+
+
+def loose_folder(name):
+    if name in BAMBOO_LOOKS:
+        return "foggy-forest"
+    return next(f for f, prefixes in LOOSE_FOLDERS.items() if name.startswith(prefixes))
+
 
 
 # ----------------------------------------------------------------------------
@@ -1187,14 +1225,16 @@ def main():
     for name, look in LOOKS.items():
         lut = np.clip(look["fn"](g), 0.0, 1.0)
         look_luts[name] = lut
-        write_cube(os.path.join(OUT_LOOK, name + ".cube"), look["title"],
+        os.makedirs(os.path.join(OUT_LOOK, loose_folder(name)), exist_ok=True)
+        write_cube(os.path.join(OUT_LOOK, loose_folder(name), name + ".cube"), look["title"],
                    ["Input and output: Rec.709 display-referred. Apply after any input transform.",
                     "Names ending -style are approximations, not measured or official stock profiles."], lut)
 
     for name, look in BAMBOO_LOOKS.items():
         lut = np.clip(look["fn"](g), 0.0, 1.0)
         look_luts[name] = lut
-        write_cube(os.path.join(OUT_LOOK, name + ".cube"), look["title"],
+        os.makedirs(os.path.join(OUT_LOOK, loose_folder(name)), exist_ok=True)
+        write_cube(os.path.join(OUT_LOOK, loose_folder(name), name + ".cube"), look["title"],
                    ["Input and output: Rec.709 display-referred. Apply after any input transform.",
                     "Vivid looks for foggy foliage. Tone and colour only: a LUT cannot blur or add bloom."], lut)
 

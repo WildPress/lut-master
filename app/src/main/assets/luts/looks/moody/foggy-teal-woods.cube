@@ -1,4 +1,4 @@
-TITLE "Dark forest (low-key teal woods in fog)"
+TITLE "Foggy teal woods (low-key teal woods in fog)"
 # Input and output: Rec.709 display-referred. Apply after any input transform.
 LUT_3D_SIZE 33
 DOMAIN_MIN 0.0 0.0 0.0

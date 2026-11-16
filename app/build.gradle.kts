@@ -13,8 +13,8 @@ android {
         applicationId = "app.lutapply"
         minSdk = 26
         targetSdk = 35
-        versionCode = 37
-        versionName = "0.28.1"
+        versionCode = 38
+        versionName = "0.29.0"
     }
 
     // Debug builds use the project's own key when it's present (git-ignored), so builds from Docker
@@ -26,6 +26,23 @@ android {
             storePassword = "android"
             keyAlias = "androiddebugkey"
             keyPassword = "android"
+        }
+    }
+
+    buildTypes {
+        // Release builds are for public sharing: not debuggable, same key as debug so either installs
+        // over the other.
+        getByName("release") {
+            isMinifyEnabled = false
+            if (projectKey.exists()) signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+
+    // -PpublicBuild=true leaves Samsung's Log LUT out of the APK. It's downloaded from Samsung behind a
+    // sign-in for personal use, so it must never ship in a public release. Users load it themselves.
+    if (providers.gradleProperty("publicBuild").orNull == "true") {
+        androidResources {
+            ignoreAssetsPattern = "!samsung-log-to-rec709.cube:!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~"
         }
     }
 

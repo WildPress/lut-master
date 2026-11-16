@@ -238,11 +238,11 @@ class MainActivity : AppCompatActivity() {
 
         advKeepColour = prefs.getBoolean("adv_keepcolour", false)
         advDiag = prefs.getBoolean("adv_diag", false)
-        favourites.addAll(prefs.getStringSet("favourites", emptySet()) ?: emptySet())
-        categoryFilter = prefs.getString("filter", FILTER_ALL) ?: FILTER_ALL
+        favourites.addAll((prefs.getStringSet("favourites", emptySet()) ?: emptySet()).map(LookCategories::migratePath))
+        categoryFilter = LookCategories.migrateCategory(prefs.getString("filter", FILTER_ALL) ?: FILTER_ALL)
         carouselLayout = prefs.getBoolean("looks_carousel", false)
         hideChipsOnScroll = prefs.getBoolean("hide_chips_on_scroll", true)
-        hiddenCategories.addAll(prefs.getStringSet("hidden_categories", emptySet()) ?: emptySet())
+        hiddenCategories.addAll((prefs.getStringSet("hidden_categories", emptySet()) ?: emptySet()).map(LookCategories::migrateCategory))
         debug.visibility = if (advDiag) View.VISIBLE else View.GONE
 
         setupToolbar()
